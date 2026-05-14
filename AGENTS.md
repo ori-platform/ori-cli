@@ -47,3 +47,44 @@ contracts.
 
 10. `CLI-10` Contract fidelity is mandatory.
 Command names, flags, and output shapes must match [`ori-specs`](https://github.com/ori-platform/ori-specs).
+
+---
+
+## Supply Chain Security Invariants
+
+These rules apply to every AI coding agent modifying this repository.
+Violating them can compromise the CLI used to deploy and manage physical-hardware runtimes.
+
+1. Never add `pull_request_target` workflows that checkout or execute untrusted
+   PR code. Use `pull_request` for fork PR workflows.
+
+2. Every GitHub Actions workflow must declare explicit least-privilege
+   permissions. Normal CI uses `contents: read` and `id-token: none`.
+
+3. `id-token: write` is allowed only in a dedicated release job in `release.yml`.
+   It must never appear in `ci.yml`.
+
+4. Release jobs must never restore dependency caches. Cache poisoning was a key
+   vector in the TanStack May 2026 supply-chain attack. `setup-go` must have
+   `cache: false` in any job that has publish permissions.
+
+5. GitHub Actions must be pinned to full commit SHAs. Mutable tags such as
+   `@v4`, `@v5`, `@main` are forbidden. Add a human-readable version comment.
+
+6. Never download and execute remote scripts in CI without hash verification.
+   `curl URL | bash` and equivalent patterns are forbidden.
+
+7. `GOFLAGS=-mod=readonly` must be set in all CI jobs. This prevents Go from
+   implicitly updating `go.mod` or `go.sum` during CI runs.
+
+8. `go mod verify` must run before any build or test step. This verifies the
+   integrity of the module cache against `go.sum` checksums.
+
+9. `CGO_ENABLED=0` must be set in CI unless CGO is explicitly required and
+   documented. ori-cli has no CGO dependency — keep it disabled.
+
+10. `go.sum` must be committed and kept up to date. Never run with
+    `-goflags=-insecure` or bypass sum verification.
+
+11. Run `scripts/check_workflows.py` before merging workflow or pre-commit
+    configuration changes. The script fails on forbidden patterns.
