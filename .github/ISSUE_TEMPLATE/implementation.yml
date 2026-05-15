@@ -1,0 +1,135 @@
+name: "Implementation Issue"
+description: "Implementation task from the Ori Platform Bootstrap or Implementation Reference"
+title: "[REPLACE-PREFIX-NNN] "
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > Every issue must have clear acceptance criteria, explicit dependencies, and enough context
+        > that a contributor who has never seen the codebase can deliver against it.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: "Why this work exists. Link to the implementation reference section and the architectural purpose."
+      placeholder: |
+        One paragraph. A contributor who reads only this should understand the "why."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: "What this issue delivers. Be specific about files, packages, and interfaces."
+      placeholder: |
+        - [ ] File/package to create or modify
+        - [ ] Interface or struct to implement
+        - [ ] Config or contract changes
+    validations:
+      required: true
+
+  - type: textarea
+    id: non-goals
+    attributes:
+      label: Non-Goals
+      description: "What this issue explicitly does NOT do. Prevents scope creep."
+      placeholder: |
+        - This issue does not implement X.
+        - This issue does not modify Y.
+    validations:
+      required: true
+
+  - type: textarea
+    id: technical-spec
+    attributes:
+      label: Technical Specification
+      description: "Code signatures, data types, algorithms, error handling. Enough detail to implement without guessing."
+      placeholder: |
+        ```go
+        func NewFromConfig(cfg ProviderConfig) (Provider, error)
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: "Checkboxes. Every one must be checked before the PR is merged."
+      placeholder: |
+        - [ ] Criterion 1
+        - [ ] Criterion 2
+        - [ ] All existing tests pass
+        - [ ] New tests cover happy path and at least one failure path
+    validations:
+      required: true
+
+  - type: textarea
+    id: tests
+    attributes:
+      label: Tests Required
+      description: "Specific test names and what each verifies."
+      placeholder: |
+        | Test | Verifies |
+        |------|----------|
+        | `TestX` | Happy path |
+        | `TestY` | Error path |
+    validations:
+      required: true
+
+  - type: textarea
+    id: invariants
+    attributes:
+      label: "Invariants — Do Not Violate"
+      description: "Copy the specific AGENTS.md invariants that apply to this issue."
+      placeholder: |
+        - **GW-2**: Every response must echo `request_id`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: "What blocks this issue and what it unblocks."
+      placeholder: |
+        **Blocked by:**
+        - #NN — short title
+
+        **Unblocks:**
+        - #MM — short title
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: Contract References
+      description: "Links to specs, implementation references, or runtime code."
+      placeholder: |
+        - `ori-specs/gateway-api/v1.md`
+        - Implementation Reference §4.4
+    validations:
+      required: false
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - "poc-critical"
+        - "post-poc"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: labels-check
+    attributes:
+      label: Additional Labels
+      options:
+        - label: "contract-change — modifies cross-repo contract"
+        - label: "runtime-impact — requires follow-up PR in ori-runtime"
+        - label: "security-sensitive — touches signing, tokens, keypairs, or Tier D"
