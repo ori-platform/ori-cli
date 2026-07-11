@@ -3,34 +3,67 @@
 
 package cmd
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+
+	"github.com/ori-platform/ori-cli/internal/bridge"
+	"github.com/ori-platform/ori-cli/internal/runtime"
+	"github.com/spf13/cobra"
+)
 
 func newSkillsCommand(state *rootState) *cobra.Command {
 	cmd := &cobra.Command{Use: "skills", Short: "Manage Ori skills"}
-	cmd.AddCommand(&cobra.Command{
+
+	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List installed runtime skills through the runtime bridge",
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, args []string) error {
-			return bridgeBacked(state, joinCommand("skills", "list"), args)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			dir, err := cmd.Flags().GetString("skills-dir")
+			if err != nil {
+				return fmt.Errorf("failed to read --skills-dir: %w", err)
+			}
+			return bridgeBacked(state, "skills", "list", "--skills-dir", dir)
 		},
-	})
-	cmd.AddCommand(&cobra.Command{
+	}
+	listCmd.Flags().String("skills-dir", bridge.DefaultSkillsDir, "skills directory")
+
+	validateCmd := &cobra.Command{
 		Use:   "validate [path]",
 		Short: "Validate a skill package through the runtime bridge",
 		Args:  cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			return bridgeBacked(state, joinCommand("skills", "validate"), args)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir, err := cmd.Flags().GetString("skills-dir")
+			if err != nil {
+				return fmt.Errorf("failed to read --skills-dir: %w", err)
+			}
+			if len(args) > 0 {
+				dir = args[0]
+			}
+			return bridgeBacked(state, "skills", "validate", "--skills-dir", dir)
 		},
-	})
-	cmd.AddCommand(&cobra.Command{
-		Use:   "reload",
-		Short: "Ask the runtime to reload skills through the runtime bridge",
+	}
+	validateCmd.Flags().String("skills-dir", bridge.DefaultSkillsDir, "skills directory")
+
+	reloadCmd := &cobra.Command{
+		Use:   "reload --pid <pid>",
+		Short: "Ask a running runtime process to reload skills via SIGHUP",
 		Args:  cobra.NoArgs,
-		RunE: func(_ *cobra.Command, args []string) error {
-			return bridgeBacked(state, joinCommand("skills", "reload"), args)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			pid, err := cmd.Flags().GetInt("pid")
+			if err != nil || pid <= 0 {
+				return fmt.Errorf("--pid must be a positive process ID")
+			}
+			if err := runtime.ReloadSkills(pid); err != nil {
+				return fmt.Errorf("skills reload failed: %w", err)
+			}
+			fmt.Fprintln(state.stdout, "skills reload signal sent")
+			return nil
 		},
-	})
+	}
+	reloadCmd.Flags().Int("pid", 0, "runtime process ID to signal")
+
+	cmd.AddCommand(listCmd, validateCmd, reloadCmd)
 	cmd.AddCommand(&cobra.Command{
 		Use:   "install <name>",
 		Short: "Install a skill from the Skills Hub",
