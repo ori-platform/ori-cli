@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="360" viewBox="0 0 760 360" role="img" aria-labelledby="title desc">
+  <title id="title">ori-cli</title>
+  <desc id="desc">Ori terminal wordmark using the Ori orange, mint, and blue design-system colors.</desc>
+  <rect width="760" height="360" rx="26" fill="#0d1826"/>
+  <style>
+    .logo {
+      font-family: Menlo, Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      font-weight: 800;
+      font-size: 31px;
+      dominant-baseline: hanging;
+      white-space: pre;
+    }
+    .label {
+      font-family: Menlo, Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      font-weight: 800;
+      font-size: 23px;
+    }
+    .motto {
+      font-family: Menlo, Consolas, "SFMono-Regular", "Liberation Mono", monospace;
+      font-size: 22px;
+    }
+  </style>
+  <g transform="translate(236 42)">
+    <text class="logo" x="0" y="0" xml:space="preserve"><tspan fill="#ff6200">       </tspan><tspan fill="#00bfa5">       </tspan><tspan fill="#4c9be8">_</tspan></text>
+    <text class="logo" x="0" y="38" xml:space="preserve"><tspan fill="#ff6200">  ____ </tspan><tspan fill="#00bfa5"> _____</tspan><tspan fill="#4c9be8">(_)</tspan></text>
+    <text class="logo" x="0" y="76" xml:space="preserve"><tspan fill="#ff6200"> / __ \</tspan><tspan fill="#00bfa5">/ ___/</tspan><tspan fill="#4c9be8"> /</tspan></text>
+    <text class="logo" x="0" y="114" xml:space="preserve"><tspan fill="#ff6200">/ /_/ /</tspan><tspan fill="#00bfa5"> /</tspan><tspan fill="#4c9be8">  / /</tspan></text>
+    <text class="logo" x="0" y="152" xml:space="preserve"><tspan fill="#ff6200">\____/</tspan><tspan fill="#00bfa5">_/</tspan><tspan fill="#4c9be8">  /_/</tspan></text>
+  </g>
+  <text class="label" x="380" y="270" text-anchor="middle" fill="#f5f8fa">ORI  <tspan fill="#00bfa5">Distributed infrastructure intelligence</tspan></text>
+  <text class="motto" x="380" y="303" text-anchor="middle" fill="#8ca0b3">Reason. Act. Prevent.</text>
+</svg>
