@@ -23,10 +23,19 @@ func newSkillsCommand(state *rootState) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to read --skills-dir: %w", err)
 			}
-			return bridgeBacked(state, "skills", "list", "--skills-dir", dir)
+			bridgeArgs := []string{"skills", "list", "--skills-dir", dir}
+			requireSigned, err := cmd.Flags().GetBool("require-signed")
+			if err != nil {
+				return fmt.Errorf("failed to read --require-signed: %w", err)
+			}
+			if requireSigned {
+				bridgeArgs = append(bridgeArgs, "--require-signed")
+			}
+			return bridgeBacked(state, bridgeArgs...)
 		},
 	}
 	listCmd.Flags().String("skills-dir", bridge.DefaultSkillsDir, "skills directory")
+	listCmd.Flags().Bool("require-signed", false, "only list skills with valid signatures")
 
 	validateCmd := &cobra.Command{
 		Use:   "validate [path]",
@@ -40,10 +49,19 @@ func newSkillsCommand(state *rootState) *cobra.Command {
 			if len(args) > 0 {
 				dir = args[0]
 			}
-			return bridgeBacked(state, "skills", "validate", "--skills-dir", dir)
+			bridgeArgs := []string{"skills", "validate", "--skills-dir", dir}
+			requireSigned, err := cmd.Flags().GetBool("require-signed")
+			if err != nil {
+				return fmt.Errorf("failed to read --require-signed: %w", err)
+			}
+			if requireSigned {
+				bridgeArgs = append(bridgeArgs, "--require-signed")
+			}
+			return bridgeBacked(state, bridgeArgs...)
 		},
 	}
 	validateCmd.Flags().String("skills-dir", bridge.DefaultSkillsDir, "skills directory")
+	validateCmd.Flags().Bool("require-signed", false, "require a valid signature on the skill")
 
 	reloadCmd := &cobra.Command{
 		Use:   "reload --pid <pid>",
