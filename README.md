@@ -17,7 +17,7 @@ Bootstrap scope:
 - Python bridge subprocess boundary for future runtime delegation.
 - Cloud client boundary for token/deploy commands.
 - Offline token-use invariant test: no network call path.
-- CI, pre-commit, license headers, and contribution guardrails.
+- CI, shell hygiene checks, license headers, and contribution guardrails.
 
 Deferred implementation:
 
@@ -30,8 +30,8 @@ Deferred implementation:
 ## Development
 
 ```bash
-pre-commit install
-SKIP=no-commit-to-branch pre-commit run --all-files
+bash scripts/check_workflows.sh
+bash scripts/check_hygiene.sh
 go test ./...
 go build ./...
 ```

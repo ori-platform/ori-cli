@@ -36,18 +36,13 @@ jobs:
           cache: false
 
       - name: Guard supply-chain invariants
-        run: python3 scripts/check_workflows.py
+        run: bash scripts/check_workflows.sh
 
       - name: Verify module integrity
         run: go mod verify
 
-      - name: Install pre-commit (hash-locked)
-        run: pip install --require-hashes -r .ci/requirements-precommit.txt
-
-      - name: Pre-commit (format + hygiene)
-        env:
-          SKIP: no-commit-to-branch
-        run: pre-commit run --show-diff-on-failure --all-files
+      - name: Format and hygiene
+        run: bash scripts/check_hygiene.sh
 
       - name: Vet
         run: go vet ./...
