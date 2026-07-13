@@ -69,7 +69,19 @@ func TestConfigValidateCallsRuntimeBridge(t *testing.T) {
 	if stdout != "ok\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
-	want := [][]string{{"config-validate", "ori.yaml"}}
+	want := [][]string{{"config", "validate", "--path", "ori.yaml"}}
+	if !reflect.DeepEqual(fake.args, want) {
+		t.Fatalf("bridge args = %#v, want %#v", fake.args, want)
+	}
+}
+
+func TestConfigShowCallsRuntimeBridge(t *testing.T) {
+	fake := &fakeBridge{out: []byte("ok\n")}
+	code, _, stderr := runWithOptions([]string{"config", "show", "/etc/ori.yaml"}, Options{Bridge: fake})
+	if code != 0 {
+		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
+	}
+	want := [][]string{{"config", "show", "--path", "/etc/ori.yaml"}}
 	if !reflect.DeepEqual(fake.args, want) {
 		t.Fatalf("bridge args = %#v, want %#v", fake.args, want)
 	}
@@ -81,9 +93,55 @@ func TestSkillsListCallsRuntimeBridge(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
 	}
-	want := [][]string{{"skills-list"}}
+	want := [][]string{{"skills", "list", "--skills-dir", "skills"}}
 	if !reflect.DeepEqual(fake.args, want) {
 		t.Fatalf("bridge args = %#v, want %#v", fake.args, want)
+	}
+}
+
+func TestSkillsListPassesRequireSigned(t *testing.T) {
+	fake := &fakeBridge{out: []byte("[]\n")}
+	code, _, stderr := runWithOptions([]string{"skills", "list", "--require-signed"}, Options{Bridge: fake})
+	if code != 0 {
+		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
+	}
+	want := [][]string{{"skills", "list", "--skills-dir", "skills", "--require-signed"}}
+	if !reflect.DeepEqual(fake.args, want) {
+		t.Fatalf("bridge args = %#v, want %#v", fake.args, want)
+	}
+}
+
+func TestSkillsValidateCallsRuntimeBridge(t *testing.T) {
+	fake := &fakeBridge{out: []byte("[]\n")}
+	code, _, stderr := runWithOptions([]string{"skills", "validate", "./my-skills"}, Options{Bridge: fake})
+	if code != 0 {
+		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
+	}
+	want := [][]string{{"skills", "validate", "--skills-dir", "./my-skills"}}
+	if !reflect.DeepEqual(fake.args, want) {
+		t.Fatalf("bridge args = %#v, want %#v", fake.args, want)
+	}
+}
+
+func TestSkillsValidatePassesRequireSigned(t *testing.T) {
+	fake := &fakeBridge{out: []byte("[]\n")}
+	code, _, stderr := runWithOptions([]string{"skills", "validate", "./my-skills", "--require-signed"}, Options{Bridge: fake})
+	if code != 0 {
+		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
+	}
+	want := [][]string{{"skills", "validate", "--skills-dir", "./my-skills", "--require-signed"}}
+	if !reflect.DeepEqual(fake.args, want) {
+		t.Fatalf("bridge args = %#v, want %#v", fake.args, want)
+	}
+}
+
+func TestSkillsReloadRequiresPID(t *testing.T) {
+	code, _, stderr := runWithOptions([]string{"skills", "reload"}, Options{})
+	if code == 0 {
+		t.Fatalf("expected failure without --pid, got code=%d", code)
+	}
+	if !strings.Contains(stderr, "--pid") {
+		t.Fatalf("expected --pid error, got stderr=%q", stderr)
 	}
 }
 

@@ -1,0 +1,17 @@
+name: sample-skill
+version: 0.1.0
+author: ori-cli-test
+license: Apache-2.0
+signature: bundled
+sensors_required:
+  - type: cpu_percent
+triggers:
+  - name: always_info
+    condition: "value > 0"
+    action_tier: A
+actions:
+  available:
+    - name: log_to_dashboard
+      tier: A
+  defaults:
+    always_info: [log_to_dashboard]

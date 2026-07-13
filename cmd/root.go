@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"time"
 
 	"github.com/ori-platform/ori-cli/internal/bridge"
@@ -104,18 +103,15 @@ func newRootCommand(state *rootState) *cobra.Command {
 	return root
 }
 
-func bridgeBacked(state *rootState, bridgeCommand string, args []string) error {
+func bridgeBacked(state *rootState, bridgeArgs ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	bridgeArgs := make([]string, 0, 1+len(args))
-	bridgeArgs = append(bridgeArgs, bridgeCommand)
-	bridgeArgs = append(bridgeArgs, args...)
 	result, err := state.bridge.Run(ctx, bridgeArgs...)
 	if len(result.Stderr) > 0 {
 		_, _ = state.stderr.Write(result.Stderr)
 	}
 	if err != nil {
-		return fmt.Errorf("runtime bridge command %q failed: %w", bridgeCommand, err)
+		return fmt.Errorf("runtime bridge command %v failed: %w", bridgeArgs, err)
 	}
 	if len(result.Stdout) > 0 {
 		_, _ = state.stdout.Write(result.Stdout)
@@ -125,8 +121,4 @@ func bridgeBacked(state *rootState, bridgeCommand string, args []string) error {
 
 func notImplemented(message string) error {
 	return errors.New("not yet implemented: " + message)
-}
-
-func joinCommand(parts ...string) string {
-	return strings.Join(parts, "-")
 }

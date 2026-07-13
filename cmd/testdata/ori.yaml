@@ -1,0 +1,55 @@
+device:
+  id: cli-test-01
+  name: CLI Test Device
+  location: Lagos
+  timezone: Africa/Lagos
+  country_code: NG
+  deployment_type: server
+  deployment_profile: development
+  site_type: office
+
+sensors:
+  - id: pc-health
+    type: cpu_percent
+    protocol: psutil
+    poll_interval_ms: 5000
+
+skills: []
+
+reasoning:
+  default_tier: rule
+  local_model: ""
+  model_path: ""
+  offline_fallback: rule
+
+gateway:
+  enabled: false
+  broker_url: ""
+
+telemetry_export:
+  enabled: false
+  endpoint: ""
+  api_key_env: ""
+  flush_interval_s: 30
+  batch_size: 50
+  timeout_ms: 3000
+  max_queue_size: 1000
+
+device_policy:
+  enabled: false
+
+actions:
+  primary_alert_channel: sms
+  operator_contact: "+234XXXXXXXXXX"
+  whatsapp:
+    enabled: false
+  sms:
+    enabled: false
+  relay:
+    enabled: false
+
+security:
+  config_signature:
+    require_signed: false
+  skills:
+    require_signed: false
