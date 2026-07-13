@@ -41,6 +41,8 @@ func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts Options) int {
+	maybeShowFirstRunWelcome(args, stdout, stderr)
+
 	state := rootState{
 		stdout:    stdout,
 		stderr:    stderr,
@@ -93,6 +95,7 @@ func newRootCommand(state *rootState) *cobra.Command {
 		}
 		return nil
 	}
+	installHelpTemplate(state, root)
 
 	root.AddCommand(newDoctorCommand(state))
 	root.AddCommand(newConfigCommand(state))
