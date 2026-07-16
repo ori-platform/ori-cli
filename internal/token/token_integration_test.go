@@ -48,7 +48,7 @@ func TestUseOfflineVerifiesPythonMintedToken(t *testing.T) {
 	}
 
 	result, err := UseOffline(minted.Token, UseOptions{
-		DeviceKeyPath:    keyPath,
+		TokenKeyPath:    keyPath,
 		ExpectedDeviceID: "dev-int-01",
 		ClockSkew:        300 * time.Second,
 	})

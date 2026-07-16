@@ -198,12 +198,15 @@ func TestTokenUseIsOfflineCommand(t *testing.T) {
 	called := false
 	useToken := func(raw string, opts token.UseOptions) (token.OfflineUseResult, error) {
 		called = true
-		if opts.DeviceKeyPath == "" {
-			return token.OfflineUseResult{}, fmt.Errorf("expected device key path")
+		if opts.TokenKeyPath == "" {
+			return token.OfflineUseResult{}, fmt.Errorf("expected token key path")
+		}
+		if opts.ExpectedDeviceID != "dev-01" {
+			return token.OfflineUseResult{}, fmt.Errorf("expected device-id dev-01")
 		}
 		return token.OfflineUseResult{OK: true, TokenFingerprint: "abc123"}, nil
 	}
-	code, stdout, stderr := runWithOptions([]string{"token", "use", "abc"}, Options{UseToken: useToken})
+	code, stdout, stderr := runWithOptions([]string{"token", "use", "abc", "--device-id", "dev-01"}, Options{UseToken: useToken})
 	if code != 0 {
 		t.Fatalf("expected token use success, got %d: %s", code, stderr)
 	}
@@ -212,6 +215,16 @@ func TestTokenUseIsOfflineCommand(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "offline token accepted") {
 		t.Fatalf("unexpected output: %s", stdout)
+	}
+}
+
+func TestTokenUseRequiresDeviceID(t *testing.T) {
+	code, _, stderr := runWithOptions([]string{"token", "use", "abc"}, Options{})
+	if code == 0 {
+		t.Fatalf("expected failure without --device-id, got code=%d", code)
+	}
+	if !strings.Contains(stderr, "--device-id") {
+		t.Fatalf("expected --device-id error, got stderr=%q", stderr)
 	}
 }
 

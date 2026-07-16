@@ -20,6 +20,10 @@ import (
 // token timestamps. It matches the runtime default in ori-specs/offline-tokens/v1.md.
 const DefaultClockSkew = 300 * time.Second
 
+// RequiredTokenClaims are the fields that must be present in every offline
+// token before it is presented to the runtime.
+var RequiredTokenClaims = []string{"token_id", "device_id", "action_scope", "issued_at", "expires_at", "nonce"}
+
 type OfflineUseResult struct {
 	OK               bool   `json:"ok"`
 	TokenFingerprint string `json:"token_fingerprint"`
@@ -28,11 +32,12 @@ type OfflineUseResult struct {
 // UseOptions configures the local offline-token validation performed by
 // `ori token use` before the token is presented to the runtime.
 type UseOptions struct {
-	// DeviceKeyPath is the filesystem path to the base64-encoded Ed25519
-	// public key used to verify the token signature.
-	DeviceKeyPath string
+	// TokenKeyPath is the filesystem path to the base64-encoded Ed25519
+	// public key of the offline-token trust anchor. This is the key that
+	// signs tokens, not the device identity key.
+	TokenKeyPath string
 
-	// ExpectedDeviceID, when non-empty, must match the token's device_id claim.
+	// ExpectedDeviceID must match the token's device_id claim.
 	ExpectedDeviceID string
 
 	// ClockSkew defaults to DefaultClockSkew when zero.
@@ -42,9 +47,9 @@ type UseOptions struct {
 	Now func() time.Time
 }
 
-// UseOffline validates an offline Tier C token locally against a device public
-// key without making network calls (CLI-1). It returns a fingerprint of the
-// token so the raw value is never echoed or logged.
+// UseOffline validates an offline Tier C token locally against the offline
+// token trust-anchor public key without making network calls (CLI-1). It
+// returns a fingerprint of the token so the raw value is never echoed or logged.
 func UseOffline(raw string, opts UseOptions) (OfflineUseResult, error) {
 	if raw == "" {
 		return OfflineUseResult{}, fmt.Errorf("token must not be empty")
@@ -60,23 +65,29 @@ func UseOffline(raw string, opts UseOptions) (OfflineUseResult, error) {
 		return OfflineUseResult{}, fmt.Errorf("invalid token encoding: %w", err)
 	}
 
-	if opts.DeviceKeyPath == "" {
-		return OfflineUseResult{}, fmt.Errorf("device key path is required")
+	if err := validateRequiredClaims(payload); err != nil {
+		return OfflineUseResult{}, err
 	}
-	publicKey, err := loadPublicKey(opts.DeviceKeyPath)
+
+	if opts.TokenKeyPath == "" {
+		return OfflineUseResult{}, fmt.Errorf("token key path is required")
+	}
+	if opts.ExpectedDeviceID == "" {
+		return OfflineUseResult{}, fmt.Errorf("device-id is required")
+	}
+
+	publicKey, err := loadPublicKey(opts.TokenKeyPath)
 	if err != nil {
-		return OfflineUseResult{}, fmt.Errorf("load device key: %w", err)
+		return OfflineUseResult{}, fmt.Errorf("load token key: %w", err)
 	}
 
 	if err := verifyTokenSignature(payload, publicKey); err != nil {
 		return OfflineUseResult{}, fmt.Errorf("token signature verification failed: %w", err)
 	}
 
-	if opts.ExpectedDeviceID != "" {
-		deviceID, _ := payload["device_id"].(string)
-		if deviceID != opts.ExpectedDeviceID {
-			return OfflineUseResult{}, fmt.Errorf("token device_id mismatch")
-		}
+	deviceID, _ := payload["device_id"].(string)
+	if deviceID != opts.ExpectedDeviceID {
+		return OfflineUseResult{}, fmt.Errorf("token device_id mismatch")
 	}
 
 	if err := checkTokenTimestamps(payload, opts.now()(), opts.clockSkew()); err != nil {
@@ -122,6 +133,15 @@ func decodeTokenPayload(raw string) (map[string]any, error) {
 		return nil, fmt.Errorf("payload is not a JSON object")
 	}
 	return payload, nil
+}
+
+func validateRequiredClaims(payload map[string]any) error {
+	for _, claim := range RequiredTokenClaims {
+		if payload[claim] == nil {
+			return fmt.Errorf("missing required claim: %s", claim)
+		}
+	}
+	return nil
 }
 
 func loadPublicKey(path string) (ed25519.PublicKey, error) {

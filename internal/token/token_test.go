@@ -64,18 +64,27 @@ func mintToken(t *testing.T, priv ed25519.PrivateKey, overrides map[string]any) 
 
 func TestUseOfflineRejectsEmptyToken(t *testing.T) {
 	pub, _ := generateKeyPair(t)
-	_, err := UseOffline("", UseOptions{DeviceKeyPath: writePublicKey(t, pub)})
+	_, err := UseOffline("", UseOptions{TokenKeyPath: writePublicKey(t, pub)})
 	if err == nil {
 		t.Fatal("expected empty token error")
 	}
 }
 
-func TestUseOfflineRequiresDeviceKey(t *testing.T) {
+func TestUseOfflineRequiresTokenKey(t *testing.T) {
 	_, priv := generateKeyPair(t)
 	token := mintToken(t, priv, nil)
-	_, err := UseOffline(token, UseOptions{})
-	if err == nil || !strings.Contains(err.Error(), "device key path is required") {
-		t.Fatalf("expected device key required error, got: %v", err)
+	_, err := UseOffline(token, UseOptions{ExpectedDeviceID: "dev-01"})
+	if err == nil || !strings.Contains(err.Error(), "token key path is required") {
+		t.Fatalf("expected token key required error, got: %v", err)
+	}
+}
+
+func TestUseOfflineRequiresDeviceID(t *testing.T) {
+	pub, priv := generateKeyPair(t)
+	token := mintToken(t, priv, nil)
+	_, err := UseOffline(token, UseOptions{TokenKeyPath: writePublicKey(t, pub)})
+	if err == nil || !strings.Contains(err.Error(), "device-id is required") {
+		t.Fatalf("expected device-id required error, got: %v", err)
 	}
 }
 
@@ -83,7 +92,8 @@ func TestUseOfflineAcceptsValidToken(t *testing.T) {
 	pub, priv := generateKeyPair(t)
 	tok := mintToken(t, priv, nil)
 	result, err := UseOffline(tok, UseOptions{
-		DeviceKeyPath: writePublicKey(t, pub),
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -102,15 +112,35 @@ func TestUseOfflineAcceptsValidToken(t *testing.T) {
 func TestUseOfflineDoesNotEchoSecretToken(t *testing.T) {
 	pub, priv := generateKeyPair(t)
 	tok := mintToken(t, priv, nil)
-	_, err := UseOffline(tok, UseOptions{DeviceKeyPath: writePublicKey(t, pub)})
+	_, err := UseOffline(tok, UseOptions{
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
+	})
 	if err != nil {
 		t.Fatalf("UseOffline returned error: %v", err)
 	}
 	// Error paths must never include the raw token. Empty key path is a safe
 	// control error that does not touch the token body.
-	_, err = UseOffline(tok, UseOptions{})
+	_, err = UseOffline(tok, UseOptions{ExpectedDeviceID: "dev-01"})
 	if err != nil && strings.Contains(err.Error(), tok) {
 		t.Fatal("raw token leaked into error message")
+	}
+}
+
+func TestUseOfflineRejectsMissingRequiredClaims(t *testing.T) {
+	pub, priv := generateKeyPair(t)
+
+	for _, claim := range []string{"token_id", "device_id", "action_scope", "issued_at", "expires_at", "nonce"} {
+		t.Run("missing "+claim, func(t *testing.T) {
+			tok := mintToken(t, priv, map[string]any{claim: nil})
+			_, err := UseOffline(tok, UseOptions{
+				TokenKeyPath:     writePublicKey(t, pub),
+				ExpectedDeviceID: "dev-01",
+			})
+			if err == nil || !strings.Contains(err.Error(), "missing required claim: "+claim) {
+				t.Fatalf("expected missing claim %q error, got: %v", claim, err)
+			}
+		})
 	}
 }
 
@@ -118,7 +148,10 @@ func TestUseOfflineRejectsInvalidSignature(t *testing.T) {
 	pub, _ := generateKeyPair(t)
 	_, wrongPriv := generateKeyPair(t)
 	tok := mintToken(t, wrongPriv, nil)
-	_, err := UseOffline(tok, UseOptions{DeviceKeyPath: writePublicKey(t, pub)})
+	_, err := UseOffline(tok, UseOptions{
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
+	})
 	if err == nil || !strings.Contains(err.Error(), "signature") {
 		t.Fatalf("expected signature error, got: %v", err)
 	}
@@ -142,7 +175,8 @@ func TestUseOfflineRejectsTamperedToken(t *testing.T) {
 	tamperedTok := base64.RawURLEncoding.EncodeToString(tamperedRaw)
 
 	_, err = UseOffline(tamperedTok, UseOptions{
-		DeviceKeyPath: writePublicKey(t, pub),
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
 	})
 	if err == nil || !strings.Contains(err.Error(), "signature") {
 		t.Fatalf("expected signature error after tampering, got: %v", err)
@@ -153,7 +187,7 @@ func TestUseOfflineRejectsDeviceIDMismatch(t *testing.T) {
 	pub, priv := generateKeyPair(t)
 	tok := mintToken(t, priv, nil)
 	_, err := UseOffline(tok, UseOptions{
-		DeviceKeyPath:    writePublicKey(t, pub),
+		TokenKeyPath:    writePublicKey(t, pub),
 		ExpectedDeviceID: "dev-other",
 	})
 	if err == nil || !strings.Contains(err.Error(), "device_id mismatch") {
@@ -169,8 +203,9 @@ func TestUseOfflineRejectsExpiredToken(t *testing.T) {
 		"expires_at": now - 400,
 	})
 	_, err := UseOffline(tok, UseOptions{
-		DeviceKeyPath: writePublicKey(t, pub),
-		Now:           func() time.Time { return time.Now() },
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
+		Now:              func() time.Time { return time.Now() },
 	})
 	if err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expected expired error, got: %v", err)
@@ -184,7 +219,10 @@ func TestUseOfflineRejectsFutureIssuedAt(t *testing.T) {
 		"issued_at":  now + 1000,
 		"expires_at": now + 2000,
 	})
-	_, err := UseOffline(tok, UseOptions{DeviceKeyPath: writePublicKey(t, pub)})
+	_, err := UseOffline(tok, UseOptions{
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
+	})
 	if err == nil || !strings.Contains(err.Error(), "future") {
 		t.Fatalf("expected future issued_at error, got: %v", err)
 	}
@@ -198,7 +236,10 @@ func TestUseOfflineRejectsMissingSignature(t *testing.T) {
 	}
 	raw, _ := json.Marshal(payload)
 	tok := base64.RawURLEncoding.EncodeToString(raw)
-	_, err := UseOffline(tok, UseOptions{DeviceKeyPath: writePublicKey(t, pub)})
+	_, err := UseOffline(tok, UseOptions{
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
+	})
 	if err == nil || !strings.Contains(err.Error(), "signature") {
 		t.Fatalf("expected missing signature error, got: %v", err)
 	}
@@ -206,7 +247,10 @@ func TestUseOfflineRejectsMissingSignature(t *testing.T) {
 
 func TestUseOfflineRejectsMalformedToken(t *testing.T) {
 	pub, _ := generateKeyPair(t)
-	_, err := UseOffline("not-base64-or-json", UseOptions{DeviceKeyPath: writePublicKey(t, pub)})
+	_, err := UseOffline("not-base64-or-json", UseOptions{
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
+	})
 	if err == nil {
 		t.Fatal("expected malformed token error")
 	}
@@ -216,7 +260,10 @@ func TestUseOfflineIsOfflineNoNetwork(t *testing.T) {
 	pub, priv := generateKeyPair(t)
 	tok := mintToken(t, priv, nil)
 	start := time.Now()
-	_, err := UseOffline(tok, UseOptions{DeviceKeyPath: writePublicKey(t, pub)})
+	_, err := UseOffline(tok, UseOptions{
+		TokenKeyPath:     writePublicKey(t, pub),
+		ExpectedDeviceID: "dev-01",
+	})
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

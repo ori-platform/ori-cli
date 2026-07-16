@@ -13,9 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// defaultDeviceKeyPath returns the operator-facing default path for the device
-// Ed25519 public key used to verify offline tokens locally.
-func defaultDeviceKeyPath() string {
+// defaultTokenKeyPath returns the operator-facing default path for the offline
+// token trust-anchor Ed25519 public key. This is the key that signs tokens, not
+// the device identity key.
+func defaultTokenKeyPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "~/.ori/device.pub"
@@ -31,16 +32,19 @@ func newTokenCommand(state *rootState) *cobra.Command {
 		Short: "Present an offline token to the local runtime without cloud access",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			keyPath, err := cmd.Flags().GetString("device-key")
+			keyPath, err := cmd.Flags().GetString("token-key")
 			if err != nil {
-				return fmt.Errorf("failed to read --device-key: %w", err)
+				return fmt.Errorf("failed to read --token-key: %w", err)
 			}
 			deviceID, err := cmd.Flags().GetString("device-id")
 			if err != nil {
 				return fmt.Errorf("failed to read --device-id: %w", err)
 			}
+			if deviceID == "" {
+				return fmt.Errorf("--device-id is required")
+			}
 			result, err := state.useToken(args[0], token.UseOptions{
-				DeviceKeyPath:    keyPath,
+				TokenKeyPath:     keyPath,
 				ExpectedDeviceID: deviceID,
 			})
 			if err != nil {
@@ -53,8 +57,8 @@ func newTokenCommand(state *rootState) *cobra.Command {
 			return nil
 		},
 	}
-	useCmd.Flags().String("device-key", defaultDeviceKeyPath(), "path to device Ed25519 public key")
-	useCmd.Flags().String("device-id", "", "expected device_id claim in the token")
+	useCmd.Flags().String("token-key", defaultTokenKeyPath(), "path to offline token Ed25519 trust-anchor public key")
+	useCmd.Flags().String("device-id", "", "expected device_id claim in the token (required)")
 	cmd.AddCommand(useCmd)
 
 	for _, sub := range []string{"generate", "list", "revoke"} {
