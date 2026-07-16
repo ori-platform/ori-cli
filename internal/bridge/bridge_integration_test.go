@@ -37,7 +37,7 @@ print(json.dumps({"ok": True, "args": sys.argv[1:]}))
 	defer cancel()
 
 	runner := Runner{Python: script, Module: "ori.cli_bridge"}
-	result, err := runner.Run(ctx, "config-validate", "--path", "ori.yaml")
+	result, err := runner.Run(ctx, "config", "validate", "--path", "ori.yaml")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,7 +51,7 @@ print(json.dumps({"ok": True, "args": sys.argv[1:]}))
 	if !ok {
 		t.Fatalf("expected args array, got %#v", payload["args"])
 	}
-	want := []string{"-m", "ori.cli_bridge", "config-validate", "--path", "ori.yaml"}
+	want := []string{"-m", "ori.cli_bridge", "config", "validate", "--path", "ori.yaml"}
 	if len(args) != len(want) {
 		t.Fatalf("args length mismatch: got %v, want %v", args, want)
 	}
@@ -59,6 +59,32 @@ print(json.dumps({"ok": True, "args": sys.argv[1:]}))
 		if args[i] != v {
 			t.Fatalf("arg[%d] = %q, want %q", i, args[i], v)
 		}
+	}
+}
+
+func TestBridgeRunnerSupportsLegacyAliases(t *testing.T) {
+	script := writeFakePython(t, `
+import sys
+import json
+print(json.dumps({"ok": True, "args": sys.argv[1:]}))
+`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	runner := Runner{Python: script, Module: "ori.cli_bridge"}
+	result, err := runner.Run(ctx, "config-validate", "--path", "ori.yaml")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(result.Stdout, &payload); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\noutput: %s", err, result.Stdout)
+	}
+	args := payload["args"].([]any)
+	if len(args) < 3 || args[2] != "config-validate" {
+		t.Fatalf("legacy alias not passed through: %v", args)
 	}
 }
 
@@ -75,7 +101,7 @@ sys.exit(1)
 	defer cancel()
 
 	runner := Runner{Python: script, Module: "ori.cli_bridge"}
-	result, err := runner.Run(ctx, "skills-list")
+	result, err := runner.Run(ctx, "skills", "list")
 	if err == nil {
 		t.Fatal("expected bridge failure")
 	}
@@ -107,7 +133,7 @@ sys.stderr.write('diagnostic line\n')
 	defer cancel()
 
 	runner := Runner{Python: script, Module: "ori.cli_bridge"}
-	result, err := runner.Run(ctx, "config-show")
+	result, err := runner.Run(ctx, "config", "show")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +156,7 @@ print(json.dumps({"ok": True, "args": sys.argv[3:]}))
 	defer cancel()
 
 	runner := Runner{Python: script, Module: "ori.cli_bridge"}
-	result, err := runner.Run(ctx, "config-validate", "--path", "path with spaces.yaml")
+	result, err := runner.Run(ctx, "config", "validate", "--path", "path with spaces.yaml")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -140,7 +166,7 @@ print(json.dumps({"ok": True, "args": sys.argv[3:]}))
 		t.Fatalf("stdout is not valid JSON: %v", err)
 	}
 	args := payload["args"].([]any)
-	if len(args) != 3 || args[0] != "config-validate" || args[1] != "--path" || args[2] != "path with spaces.yaml" {
+	if len(args) != 4 || args[0] != "config" || args[1] != "validate" || args[2] != "--path" || args[3] != "path with spaces.yaml" {
 		t.Fatalf("quoted argument was split or reordered: %v", args)
 	}
 }
@@ -166,7 +192,7 @@ print(json.dumps({"ok": True}))
 	}()
 
 	start := time.Now()
-	_, err := runner.Run(ctx, "slow-command")
+	_, err := runner.Run(ctx, "slow", "command")
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -186,7 +212,7 @@ print("this is not json")
 	defer cancel()
 
 	runner := Runner{Python: script, Module: "ori.cli_bridge"}
-	result, err := runner.Run(ctx, "config-validate")
+	result, err := runner.Run(ctx, "config", "validate")
 	if err != nil {
 		t.Fatalf("unexpected error for exit-zero malformed output: %v", err)
 	}
@@ -216,7 +242,7 @@ print(json.dumps({"ok": True, "module_arg": sys.argv[1], "cmd_arg": sys.argv[2]}
 	defer cancel()
 
 	runner := Runner{Python: script} // Module left empty
-	result, err := runner.Run(ctx, "config-validate")
+	result, err := runner.Run(ctx, "config", "validate")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

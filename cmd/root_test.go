@@ -61,12 +61,12 @@ func TestJSONErrorPayload(t *testing.T) {
 }
 
 func TestConfigValidateCallsRuntimeBridge(t *testing.T) {
-	fake := &fakeBridge{out: []byte("ok\n")}
+	fake := &fakeBridge{out: []byte(`{"ok":true}` + "\n")}
 	code, stdout, stderr := runWithOptions([]string{"config", "validate", "ori.yaml"}, Options{Bridge: fake})
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
 	}
-	if stdout != "ok\n" {
+	if stdout != `{"ok":true}`+"\n" {
 		t.Fatalf("stdout = %q", stdout)
 	}
 	want := [][]string{{"config", "validate", "--path", "ori.yaml"}}
@@ -76,7 +76,7 @@ func TestConfigValidateCallsRuntimeBridge(t *testing.T) {
 }
 
 func TestConfigShowCallsRuntimeBridge(t *testing.T) {
-	fake := &fakeBridge{out: []byte("ok\n")}
+	fake := &fakeBridge{out: []byte(`{"ok":true}` + "\n")}
 	code, _, stderr := runWithOptions([]string{"config", "show", "/etc/ori.yaml"}, Options{Bridge: fake})
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
@@ -132,6 +132,17 @@ func TestSkillsValidatePassesRequireSigned(t *testing.T) {
 	want := [][]string{{"skills", "validate", "--skills-dir", "./my-skills", "--require-signed"}}
 	if !reflect.DeepEqual(fake.args, want) {
 		t.Fatalf("bridge args = %#v, want %#v", fake.args, want)
+	}
+}
+
+func TestBridgeMalformedJSONReturnsError(t *testing.T) {
+	fake := &fakeBridge{out: []byte("this is not json\n")}
+	code, _, stderr := runWithOptions([]string{"config", "validate", "ori.yaml"}, Options{Bridge: fake})
+	if code == 0 {
+		t.Fatalf("expected failure for malformed bridge JSON, got code=%d", code)
+	}
+	if !strings.Contains(stderr, "invalid JSON") {
+		t.Fatalf("expected invalid JSON error, got stderr=%q", stderr)
 	}
 }
 
