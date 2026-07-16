@@ -223,8 +223,24 @@ func TestTokenUseRequiresDeviceID(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("expected failure without --device-id, got code=%d", code)
 	}
-	if !strings.Contains(stderr, "--device-id") {
-		t.Fatalf("expected --device-id error, got stderr=%q", stderr)
+	if !strings.Contains(stderr, "device-id") {
+		t.Fatalf("expected device-id error, got stderr=%q", stderr)
+	}
+}
+
+func TestTokenUseRejectsWrongDeviceID(t *testing.T) {
+	useToken := func(raw string, opts token.UseOptions) (token.OfflineUseResult, error) {
+		if opts.ExpectedDeviceID != "dev-01" {
+			return token.OfflineUseResult{}, fmt.Errorf("token device_id mismatch")
+		}
+		return token.OfflineUseResult{OK: true, TokenFingerprint: "abc123"}, nil
+	}
+	code, _, stderr := runWithOptions([]string{"token", "use", "abc", "--device-id", "dev-other"}, Options{UseToken: useToken})
+	if code == 0 {
+		t.Fatalf("expected failure with wrong --device-id, got code=%d", code)
+	}
+	if !strings.Contains(stderr, "device_id mismatch") {
+		t.Fatalf("expected device_id mismatch error, got stderr=%q", stderr)
 	}
 }
 

@@ -130,9 +130,22 @@ func TestUseOfflineDoesNotEchoSecretToken(t *testing.T) {
 func TestUseOfflineRejectsMissingRequiredClaims(t *testing.T) {
 	pub, priv := generateKeyPair(t)
 
-	for _, claim := range []string{"token_id", "device_id", "action_scope", "issued_at", "expires_at", "nonce"} {
+	for _, claim := range []string{"token_id", "device_id", "action_scope", "issued_at", "expires_at", "nonce", "signature"} {
 		t.Run("missing "+claim, func(t *testing.T) {
-			tok := mintToken(t, priv, map[string]any{claim: nil})
+			var tok string
+			if claim == "signature" {
+				// mintToken always adds a signature, so build a token without one.
+				now := time.Now().Unix()
+				payload := map[string]any{
+					"token_id": "tok-01", "device_id": "dev-01",
+					"action_scope": "open_safety_circuit",
+					"issued_at": now - 5, "expires_at": now + 120, "nonce": "n1",
+				}
+				raw, _ := json.Marshal(payload)
+				tok = base64.RawURLEncoding.EncodeToString(raw)
+			} else {
+				tok = mintToken(t, priv, map[string]any{claim: nil})
+			}
 			_, err := UseOffline(tok, UseOptions{
 				TokenKeyPath:     writePublicKey(t, pub),
 				ExpectedDeviceID: "dev-01",
@@ -240,8 +253,8 @@ func TestUseOfflineRejectsMissingSignature(t *testing.T) {
 		TokenKeyPath:     writePublicKey(t, pub),
 		ExpectedDeviceID: "dev-01",
 	})
-	if err == nil || !strings.Contains(err.Error(), "signature") {
-		t.Fatalf("expected missing signature error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "missing required claim: signature") {
+		t.Fatalf("expected missing signature claim error, got: %v", err)
 	}
 }
 

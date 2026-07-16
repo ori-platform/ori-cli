@@ -22,7 +22,7 @@ const DefaultClockSkew = 300 * time.Second
 
 // RequiredTokenClaims are the fields that must be present in every offline
 // token before it is presented to the runtime.
-var RequiredTokenClaims = []string{"token_id", "device_id", "action_scope", "issued_at", "expires_at", "nonce"}
+var RequiredTokenClaims = []string{"token_id", "device_id", "action_scope", "issued_at", "expires_at", "nonce", "signature"}
 
 type OfflineUseResult struct {
 	OK               bool   `json:"ok"`

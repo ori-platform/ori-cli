@@ -40,9 +40,6 @@ func newTokenCommand(state *rootState) *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to read --device-id: %w", err)
 			}
-			if deviceID == "" {
-				return fmt.Errorf("--device-id is required")
-			}
 			result, err := state.useToken(args[0], token.UseOptions{
 				TokenKeyPath:     keyPath,
 				ExpectedDeviceID: deviceID,
@@ -59,6 +56,7 @@ func newTokenCommand(state *rootState) *cobra.Command {
 	}
 	useCmd.Flags().String("token-key", defaultTokenKeyPath(), "path to offline token Ed25519 trust-anchor public key")
 	useCmd.Flags().String("device-id", "", "expected device_id claim in the token (required)")
+	_ = useCmd.MarkFlagRequired("device-id")
 	cmd.AddCommand(useCmd)
 
 	for _, sub := range []string{"generate", "list", "revoke"} {
