@@ -139,7 +139,7 @@ func TestUseOfflineRejectsMissingRequiredClaims(t *testing.T) {
 				payload := map[string]any{
 					"token_id": "tok-01", "device_id": "dev-01",
 					"action_scope": "open_safety_circuit",
-					"issued_at": now - 5, "expires_at": now + 120, "nonce": "n1",
+					"issued_at":    now - 5, "expires_at": now + 120, "nonce": "n1",
 				}
 				raw, _ := json.Marshal(payload)
 				tok = base64.RawURLEncoding.EncodeToString(raw)
@@ -200,7 +200,7 @@ func TestUseOfflineRejectsDeviceIDMismatch(t *testing.T) {
 	pub, priv := generateKeyPair(t)
 	tok := mintToken(t, priv, nil)
 	_, err := UseOffline(tok, UseOptions{
-		TokenKeyPath:    writePublicKey(t, pub),
+		TokenKeyPath:     writePublicKey(t, pub),
 		ExpectedDeviceID: "dev-other",
 	})
 	if err == nil || !strings.Contains(err.Error(), "device_id mismatch") {
