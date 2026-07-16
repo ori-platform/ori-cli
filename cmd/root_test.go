@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -195,9 +196,12 @@ func TestRuntimeHealthJSONUsesParsedHealthStatus(t *testing.T) {
 
 func TestTokenUseIsOfflineCommand(t *testing.T) {
 	called := false
-	useToken := func(raw string) (token.OfflineUseResult, error) {
+	useToken := func(raw string, opts token.UseOptions) (token.OfflineUseResult, error) {
 		called = true
-		return token.UseOffline(raw)
+		if opts.DeviceKeyPath == "" {
+			return token.OfflineUseResult{}, fmt.Errorf("expected device key path")
+		}
+		return token.OfflineUseResult{OK: true, TokenFingerprint: "abc123"}, nil
 	}
 	code, stdout, stderr := runWithOptions([]string{"token", "use", "abc"}, Options{UseToken: useToken})
 	if code != 0 {
