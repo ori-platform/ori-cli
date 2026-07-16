@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -110,11 +111,27 @@ func bridgeBacked(state *rootState, bridgeArgs ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	result, err := state.bridge.Run(ctx, bridgeArgs...)
-	if len(result.Stderr) > 0 {
-		_, _ = state.stderr.Write(result.Stderr)
-	}
 	if err != nil {
+		if len(result.Stderr) > 0 {
+			_, _ = state.stderr.Write(result.Stderr)
+		}
 		return fmt.Errorf("runtime bridge command %v failed: %w", bridgeArgs, err)
+	}
+	// The runtime bridge contract requires exactly one JSON object on stdout.
+	// Reject malformed output before it reaches the operator.
+	var raw json.RawMessage
+	if jsonErr := json.Unmarshal(result.Stdout, &raw); jsonErr != nil {
+		if len(result.Stderr) > 0 {
+			_, _ = state.stderr.Write(result.Stderr)
+		}
+		return fmt.Errorf("runtime bridge returned invalid JSON: %w", jsonErr)
+	}
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(raw, &payload); jsonErr != nil || payload == nil {
+		if len(result.Stderr) > 0 {
+			_, _ = state.stderr.Write(result.Stderr)
+		}
+		return fmt.Errorf("runtime bridge returned a non-object JSON value")
 	}
 	if len(result.Stdout) > 0 {
 		_, _ = state.stdout.Write(result.Stdout)
