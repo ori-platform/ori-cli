@@ -88,7 +88,7 @@ func TestConfigShowCallsRuntimeBridge(t *testing.T) {
 }
 
 func TestSkillsListCallsRuntimeBridge(t *testing.T) {
-	fake := &fakeBridge{out: []byte("[]\n")}
+	fake := &fakeBridge{out: []byte(`{"ok":true,"skills":[]}` + "\n")}
 	code, _, stderr := runWithOptions([]string{"skills", "list"}, Options{Bridge: fake})
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
@@ -100,7 +100,7 @@ func TestSkillsListCallsRuntimeBridge(t *testing.T) {
 }
 
 func TestSkillsListPassesRequireSigned(t *testing.T) {
-	fake := &fakeBridge{out: []byte("[]\n")}
+	fake := &fakeBridge{out: []byte(`{"ok":true,"skills":[]}` + "\n")}
 	code, _, stderr := runWithOptions([]string{"skills", "list", "--require-signed"}, Options{Bridge: fake})
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
@@ -112,7 +112,7 @@ func TestSkillsListPassesRequireSigned(t *testing.T) {
 }
 
 func TestSkillsValidateCallsRuntimeBridge(t *testing.T) {
-	fake := &fakeBridge{out: []byte("[]\n")}
+	fake := &fakeBridge{out: []byte(`{"ok":true}` + "\n")}
 	code, _, stderr := runWithOptions([]string{"skills", "validate", "./my-skills"}, Options{Bridge: fake})
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
@@ -124,7 +124,7 @@ func TestSkillsValidateCallsRuntimeBridge(t *testing.T) {
 }
 
 func TestSkillsValidatePassesRequireSigned(t *testing.T) {
-	fake := &fakeBridge{out: []byte("[]\n")}
+	fake := &fakeBridge{out: []byte(`{"ok":true}` + "\n")}
 	code, _, stderr := runWithOptions([]string{"skills", "validate", "./my-skills", "--require-signed"}, Options{Bridge: fake})
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
@@ -143,6 +143,17 @@ func TestBridgeMalformedJSONReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "invalid JSON") {
 		t.Fatalf("expected invalid JSON error, got stderr=%q", stderr)
+	}
+}
+
+func TestBridgeNonObjectJSONReturnsError(t *testing.T) {
+	fake := &fakeBridge{out: []byte("[]\n")}
+	code, _, stderr := runWithOptions([]string{"config", "validate", "ori.yaml"}, Options{Bridge: fake})
+	if code == 0 {
+		t.Fatalf("expected failure for non-object bridge JSON, got code=%d", code)
+	}
+	if !strings.Contains(stderr, "non-object") {
+		t.Fatalf("expected non-object JSON error, got stderr=%q", stderr)
 	}
 }
 

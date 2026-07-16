@@ -119,12 +119,19 @@ func bridgeBacked(state *rootState, bridgeArgs ...string) error {
 	}
 	// The runtime bridge contract requires exactly one JSON object on stdout.
 	// Reject malformed output before it reaches the operator.
-	var payload any
-	if jsonErr := json.Unmarshal(result.Stdout, &payload); jsonErr != nil {
+	var raw json.RawMessage
+	if jsonErr := json.Unmarshal(result.Stdout, &raw); jsonErr != nil {
 		if len(result.Stderr) > 0 {
 			_, _ = state.stderr.Write(result.Stderr)
 		}
 		return fmt.Errorf("runtime bridge returned invalid JSON: %w", jsonErr)
+	}
+	var payload map[string]any
+	if jsonErr := json.Unmarshal(raw, &payload); jsonErr != nil || payload == nil {
+		if len(result.Stderr) > 0 {
+			_, _ = state.stderr.Write(result.Stderr)
+		}
+		return fmt.Errorf("runtime bridge returned a non-object JSON value")
 	}
 	if len(result.Stdout) > 0 {
 		_, _ = state.stdout.Write(result.Stdout)
