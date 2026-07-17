@@ -25,7 +25,7 @@ type BridgeRunner interface {
 type Options struct {
 	Bridge    BridgeRunner
 	GetHealth func(context.Context, string) (rpc.RuntimeHealthStatus, error)
-	UseToken  func(string) (token.OfflineUseResult, error)
+	UseToken  func(string, token.UseOptions) (token.OfflineUseResult, error)
 }
 
 type rootState struct {
@@ -34,7 +34,7 @@ type rootState struct {
 	stderr    io.Writer
 	bridge    BridgeRunner
 	getHealth func(context.Context, string) (rpc.RuntimeHealthStatus, error)
-	useToken  func(string) (token.OfflineUseResult, error)
+	useToken  func(string, token.UseOptions) (token.OfflineUseResult, error)
 }
 
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
