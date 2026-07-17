@@ -141,6 +141,16 @@ func validateRequiredClaims(payload map[string]any) error {
 			return fmt.Errorf("missing required claim: %s", claim)
 		}
 	}
+	// String claims must be non-empty after trimming.
+	for _, claim := range []string{"token_id", "action_scope", "nonce"} {
+		value, ok := payload[claim].(string)
+		if !ok {
+			return fmt.Errorf("required claim %s must be a string", claim)
+		}
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("required claim %s must not be empty", claim)
+		}
+	}
 	return nil
 }
 

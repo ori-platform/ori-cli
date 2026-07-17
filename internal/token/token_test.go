@@ -157,6 +157,23 @@ func TestUseOfflineRejectsMissingRequiredClaims(t *testing.T) {
 	}
 }
 
+func TestUseOfflineRejectsEmptyStringClaims(t *testing.T) {
+	pub, priv := generateKeyPair(t)
+
+	for _, claim := range []string{"token_id", "action_scope", "nonce"} {
+		t.Run("empty "+claim, func(t *testing.T) {
+			tok := mintToken(t, priv, map[string]any{claim: ""})
+			_, err := UseOffline(tok, UseOptions{
+				TokenKeyPath:     writePublicKey(t, pub),
+				ExpectedDeviceID: "dev-01",
+			})
+			if err == nil || !strings.Contains(err.Error(), "required claim "+claim+" must not be empty") {
+				t.Fatalf("expected empty claim %q error, got: %v", claim, err)
+			}
+		})
+	}
+}
+
 func TestUseOfflineRejectsInvalidSignature(t *testing.T) {
 	pub, _ := generateKeyPair(t)
 	_, wrongPriv := generateKeyPair(t)

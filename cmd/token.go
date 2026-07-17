@@ -19,9 +19,9 @@ import (
 func defaultTokenKeyPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "~/.ori/device.pub"
+		return "~/.ori/offline-token.pub"
 	}
-	return filepath.Join(home, ".ori", "device.pub")
+	return filepath.Join(home, ".ori", "offline-token.pub")
 }
 
 func newTokenCommand(state *rootState) *cobra.Command {
