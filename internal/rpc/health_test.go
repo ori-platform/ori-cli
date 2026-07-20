@@ -65,3 +65,51 @@ func TestParseHealthRejectsInvalidJSON(t *testing.T) {
 		t.Fatalf("expected decode error, got %v", err)
 	}
 }
+
+func TestParseHealthReadsWrappedEnvelope(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"ok":true,"health":{"device_id":"edge-2","evidence":{"enabled":true,"available":true,"public_key_hex":"aabbccdd"}}}` + "\n")
+	got, err := ParseHealth(payload)
+	if err != nil {
+		t.Fatalf("ParseHealth: %v", err)
+	}
+	if got.DeviceID != "edge-2" {
+		t.Fatalf("DeviceID = %q, want edge-2", got.DeviceID)
+	}
+	if !got.Evidence.Enabled {
+		t.Fatal("expected Evidence.Enabled = true")
+	}
+	if !got.Evidence.Available {
+		t.Fatal("expected Evidence.Available = true")
+	}
+	if got.Evidence.PublicKeyHex != "aabbccdd" {
+		t.Fatalf("Evidence.PublicKeyHex = %q, want aabbccdd", got.Evidence.PublicKeyHex)
+	}
+}
+
+func TestParseHealthReadsFlatLegacyResponse(t *testing.T) {
+	payload := []byte(`{"status":"ok","device_id":"edge-3"}` + "\n")
+	got, err := ParseHealth(payload)
+	if err != nil {
+		t.Fatalf("ParseHealth: %v", err)
+	}
+	if got.Status != "ok" {
+		t.Fatalf("Status = %q, want ok", got.Status)
+	}
+	if got.DeviceID != "edge-3" {
+		t.Fatalf("DeviceID = %q, want edge-3", got.DeviceID)
+	}
+}
+
+func TestParseHealthHandlesMissingEvidence(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"ok":true,"health":{"device_id":"edge-4"}}` + "\n")
+	got, err := ParseHealth(payload)
+	if err != nil {
+		t.Fatalf("ParseHealth: %v", err)
+	}
+	if got.DeviceID != "edge-4" {
+		t.Fatalf("DeviceID = %q, want edge-4", got.DeviceID)
+	}
+	if got.Evidence.PublicKeyHex != "" {
+		t.Fatalf("expected empty evidence public key, got %q", got.Evidence.PublicKeyHex)
+	}
+}

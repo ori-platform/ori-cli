@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ori-platform/ori-cli/internal/bridge"
+	"github.com/ori-platform/ori-cli/internal/cloud"
 	"github.com/ori-platform/ori-cli/internal/output"
 	"github.com/ori-platform/ori-cli/internal/rpc"
 	"github.com/ori-platform/ori-cli/internal/token"
@@ -23,18 +24,20 @@ type BridgeRunner interface {
 }
 
 type Options struct {
-	Bridge    BridgeRunner
-	GetHealth func(context.Context, string) (rpc.RuntimeHealthStatus, error)
-	UseToken  func(string, token.UseOptions) (token.OfflineUseResult, error)
+	Bridge         BridgeRunner
+	GetHealth      func(context.Context, string) (rpc.RuntimeHealthStatus, error)
+	UseToken       func(string, token.UseOptions) (token.OfflineUseResult, error)
+	RegisterDevice func(context.Context, string, cloud.RegisterDeviceRequest) (cloud.RegisterDeviceResponse, error)
 }
 
 type rootState struct {
-	json      bool
-	stdout    io.Writer
-	stderr    io.Writer
-	bridge    BridgeRunner
-	getHealth func(context.Context, string) (rpc.RuntimeHealthStatus, error)
-	useToken  func(string, token.UseOptions) (token.OfflineUseResult, error)
+	json           bool
+	stdout         io.Writer
+	stderr         io.Writer
+	bridge         BridgeRunner
+	getHealth      func(context.Context, string) (rpc.RuntimeHealthStatus, error)
+	useToken       func(string, token.UseOptions) (token.OfflineUseResult, error)
+	registerDevice func(context.Context, string, cloud.RegisterDeviceRequest) (cloud.RegisterDeviceResponse, error)
 }
 
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -45,11 +48,12 @@ func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts 
 	maybeShowFirstRunWelcome(args, stdout, stderr)
 
 	state := rootState{
-		stdout:    stdout,
-		stderr:    stderr,
-		bridge:    opts.Bridge,
-		getHealth: opts.GetHealth,
-		useToken:  opts.UseToken,
+		stdout:         stdout,
+		stderr:         stderr,
+		bridge:         opts.Bridge,
+		getHealth:      opts.GetHealth,
+		useToken:       opts.UseToken,
+		registerDevice: opts.RegisterDevice,
 	}
 	if state.bridge == nil {
 		state.bridge = bridge.DefaultRunner()
@@ -59,6 +63,9 @@ func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts 
 	}
 	if state.useToken == nil {
 		state.useToken = token.UseOffline
+	}
+	if state.registerDevice == nil {
+		state.registerDevice = defaultRegisterDevice
 	}
 
 	root := newRootCommand(&state)
@@ -141,4 +148,8 @@ func bridgeBacked(state *rootState, bridgeArgs ...string) error {
 
 func notImplemented(message string) error {
 	return errors.New("not yet implemented: " + message)
+}
+
+func defaultRegisterDevice(ctx context.Context, baseURL string, req cloud.RegisterDeviceRequest) (cloud.RegisterDeviceResponse, error) {
+	return cloud.New(baseURL).RegisterDevice(ctx, req)
 }

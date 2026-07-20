@@ -13,9 +13,18 @@ import (
 
 const DefaultHealthSocket = "/run/ori/health.sock"
 
+// EvidenceStatus is the runtime health evidence block that describes the
+// Verity chain signing state on the device.
+type EvidenceStatus struct {
+	Enabled      bool   `json:"enabled"`
+	Available    bool   `json:"available"`
+	PublicKeyHex string `json:"public_key_hex"`
+}
+
 type RuntimeHealthStatus struct {
 	Status   string         `json:"status,omitempty"`
 	DeviceID string         `json:"device_id,omitempty"`
+	Evidence EvidenceStatus `json:"evidence,omitempty"`
 	Raw      map[string]any `json:"-"`
 }
 
@@ -57,17 +66,49 @@ func GetHealth(ctx context.Context, socketPath string) (RuntimeHealthStatus, err
 	return ParseHealth(line)
 }
 
+// ParseHealth parses a runtime health JSON response. It accepts both the
+// canonical wrapped envelope {"ok":true,"health":{...}} and the legacy flat
+// form {"status":"ok","device_id":"..."} so tests and older runtimes keep
+// working.
 func ParseHealth(payload []byte) (RuntimeHealthStatus, error) {
-	var raw map[string]any
-	if err := json.Unmarshal(payload, &raw); err != nil {
+	var envelope map[string]any
+	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return RuntimeHealthStatus{}, fmt.Errorf("decode runtime health JSON: %w", err)
 	}
-	status := RuntimeHealthStatus{Raw: raw}
+
+	// Canonical runtime response is wrapped in {"schema_version":1,"ok":true,"health":{...}}.
+	var raw map[string]any
+	if health, ok := envelope["health"].(map[string]any); ok {
+		raw = health
+	} else {
+		raw = envelope
+	}
+
+	status := RuntimeHealthStatus{Raw: envelope}
 	if value, ok := raw["status"].(string); ok {
 		status.Status = value
 	}
 	if value, ok := raw["device_id"].(string); ok {
 		status.DeviceID = value
 	}
+	status.Evidence = parseEvidence(raw["evidence"])
 	return status, nil
+}
+
+func parseEvidence(value any) EvidenceStatus {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return EvidenceStatus{}
+	}
+	var es EvidenceStatus
+	if v, ok := m["enabled"].(bool); ok {
+		es.Enabled = v
+	}
+	if v, ok := m["available"].(bool); ok {
+		es.Available = v
+	}
+	if v, ok := m["public_key_hex"].(string); ok {
+		es.PublicKeyHex = v
+	}
+	return es
 }
