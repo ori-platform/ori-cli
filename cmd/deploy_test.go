@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ori-platform/ori-cli/internal/cloud"
 	"github.com/ori-platform/ori-cli/internal/deploy"
 	"github.com/ori-platform/ori-cli/internal/rpc"
 )
@@ -24,8 +23,9 @@ func healthyStatus(deviceID string, evidencePub string) func(context.Context, st
 			es = rpc.EvidenceStatus{Enabled: true, Available: true, PublicKeyHex: evidencePub}
 		}
 		return rpc.RuntimeHealthStatus{
-			DeviceID: deviceID,
-			Evidence: es,
+			DeviceID:  deviceID,
+			Evidence:  es,
+			Canonical: true,
 		}, nil
 	}
 }
@@ -108,6 +108,28 @@ func TestDeployFailsWithoutDeviceID(t *testing.T) {
 	}
 }
 
+func TestDeployRejectsLegacyHealthBeforeWritingKeys(t *testing.T) {
+	dir := t.TempDir()
+	legacy, err := rpc.ParseHealth([]byte(`{"status":"ok","device_id":"edge-legacy"}`))
+	if err != nil {
+		t.Fatalf("parse legacy health fixture: %v", err)
+	}
+	getHealth := func(_ context.Context, _ string) (rpc.RuntimeHealthStatus, error) {
+		return legacy, nil
+	}
+
+	code, _, stderr := runWithOptions([]string{"deploy", "--key-dir", dir}, Options{GetHealth: getHealth})
+	if code == 0 {
+		t.Fatal("expected legacy health response to be refused")
+	}
+	if !strings.Contains(stderr, "canonical v1 envelope") {
+		t.Fatalf("expected canonical-envelope error, got stderr=%q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, deploy.PrivateKeyFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("private key should not be written after legacy health: %v", err)
+	}
+}
+
 func TestDeployFailsOnHealthErrorEnvelope(t *testing.T) {
 	dir := t.TempDir()
 	getHealth := func(_ context.Context, _ string) (rpc.RuntimeHealthStatus, error) {
@@ -141,8 +163,9 @@ func TestDeployFailsWhenEvidenceEnabledButAnchorMissing(t *testing.T) {
 	dir := t.TempDir()
 	getHealth := func(_ context.Context, _ string) (rpc.RuntimeHealthStatus, error) {
 		return rpc.RuntimeHealthStatus{
-			DeviceID: "edge-3",
-			Evidence: rpc.EvidenceStatus{Enabled: true, Available: false, PublicKeyHex: ""},
+			DeviceID:  "edge-3",
+			Evidence:  rpc.EvidenceStatus{Enabled: true, Available: false, PublicKeyHex: ""},
+			Canonical: true,
 		}, nil
 	}
 	code, _, stderr := runWithOptions([]string{"deploy", "--key-dir", dir}, Options{GetHealth: getHealth})
@@ -151,6 +174,31 @@ func TestDeployFailsWhenEvidenceEnabledButAnchorMissing(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "evidence layer is enabled") {
 		t.Fatalf("expected evidence state unavailable error, got stderr=%q", stderr)
+	}
+}
+
+func TestDeployFailsOnInconsistentDisabledEvidenceState(t *testing.T) {
+	dir := t.TempDir()
+	getHealth := func(_ context.Context, _ string) (rpc.RuntimeHealthStatus, error) {
+		return rpc.RuntimeHealthStatus{
+			DeviceID: "edge-3",
+			Evidence: rpc.EvidenceStatus{
+				Enabled:      false,
+				Available:    true,
+				PublicKeyHex: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+			},
+			Canonical: true,
+		}, nil
+	}
+	code, _, stderr := runWithOptions([]string{"deploy", "--key-dir", dir}, Options{GetHealth: getHealth})
+	if code == 0 {
+		t.Fatal("expected inconsistent disabled evidence state to fail")
+	}
+	if !strings.Contains(stderr, "disabled but runtime health reported active evidence material") {
+		t.Fatalf("expected inconsistent evidence error, got stderr=%q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, deploy.PrivateKeyFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("private key should not be written after inconsistent evidence health: %v", err)
 	}
 }
 
@@ -227,8 +275,8 @@ func TestDeployJSONOutput(t *testing.T) {
 	if !ok || len(pubHex) != 64 {
 		t.Fatalf("expected 64-char identity_pubkey_hex, got %v", payload["identity_pubkey_hex"])
 	}
-	if payload["cloud_registered"] != false {
-		t.Fatalf("expected cloud_registered=false, got %v", payload["cloud_registered"])
+	if payload["cloud_registration"] != "deferred" {
+		t.Fatalf("expected cloud_registration=deferred, got %v", payload["cloud_registration"])
 	}
 }
 
@@ -282,203 +330,56 @@ func TestDeployHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("expected help success, got code=%d stderr=%q", code, stderr)
 	}
-	for _, flag := range []string{"--dry-run", "--force", "--socket", "--cloud-url", "--device-api-key", "--yes"} {
+	for _, flag := range []string{"--dry-run", "--force", "--socket"} {
 		if !strings.Contains(stdout, flag) {
 			t.Fatalf("expected %s in help, got %q", flag, stdout)
 		}
 	}
-}
-
-func TestDeployRegistersKeypairWithCloud(t *testing.T) {
-	dir := t.TempDir()
-	getHealth := healthyStatus("edge-cloud", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-
-	var got cloud.RegisterKeypairRequest
-	var gotBaseURL, gotAPIKey, gotDeviceID string
-	registerKeypair := func(_ context.Context, baseURL, apiKey, deviceID string, req cloud.RegisterKeypairRequest) error {
-		gotBaseURL = baseURL
-		gotAPIKey = apiKey
-		gotDeviceID = deviceID
-		got = req
-		return nil
-	}
-
-	code, stdout, stderr := runWithOptions(
-		[]string{"deploy", "--key-dir", dir, "--cloud-url", "https://cloud.example.com", "--device-api-key", "api-key-123", "--yes"},
-		Options{GetHealth: getHealth, RegisterKeypair: registerKeypair},
-	)
-	if code != 0 {
-		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
-	}
-
-	if gotBaseURL != "https://cloud.example.com" {
-		t.Fatalf("baseURL = %q, want https://cloud.example.com", gotBaseURL)
-	}
-	if gotAPIKey != "api-key-123" {
-		t.Fatalf("apiKey = %q, want api-key-123", gotAPIKey)
-	}
-	if gotDeviceID != "edge-cloud" {
-		t.Fatalf("DeviceID = %q, want edge-cloud", gotDeviceID)
-	}
-	if len(got.IdentityPubKeyHex) != 64 {
-		t.Fatalf("IdentityPubKeyHex length = %d, want 64", len(got.IdentityPubKeyHex))
-	}
-	if !strings.Contains(stdout, "successful") {
-		t.Fatalf("expected successful registration message, got %q", stdout)
-	}
-}
-
-func TestDeployCloudPayloadNeverContainsPrivateKey(t *testing.T) {
-	dir := t.TempDir()
-	getHealth := healthyStatus("edge-cloud", "")
-
-	registerKeypair := func(_ context.Context, _, _, _ string, req cloud.RegisterKeypairRequest) error {
-		body, _ := json.Marshal(req)
-		bodyStr := string(body)
-		for _, forbidden := range []string{"private", "BEGIN PRIVATE KEY", "secret"} {
-			if strings.Contains(bodyStr, forbidden) {
-				t.Fatalf("cloud payload contains forbidden fragment %q: %s", forbidden, bodyStr)
-			}
+	for _, flag := range []string{"--cloud-url", "--device-api-key", "--yes"} {
+		if strings.Contains(stdout, flag) {
+			t.Fatalf("did not expect unpinned cloud mutation flag %s in help, got %q", flag, stdout)
 		}
-		return nil
 	}
-
-	code, _, stderr := runWithOptions(
-		[]string{"deploy", "--key-dir", dir, "--cloud-url", "https://cloud.example.com", "--device-api-key", "api-key", "--yes"},
-		Options{GetHealth: getHealth, RegisterKeypair: registerKeypair},
-	)
-	if code != 0 {
-		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
+	if !strings.Contains(stdout, "Cloud registration is deliberately deferred") {
+		t.Fatalf("expected explicit cloud deferral in help, got %q", stdout)
 	}
 }
 
-func TestDeployRequiresYesForCloudRegistration(t *testing.T) {
+func TestDeployRejectsUnpinnedCloudMutationFlagsBeforeWritingKeys(t *testing.T) {
 	dir := t.TempDir()
-	getHealth := healthyStatus("edge-cloud", "")
-
-	called := false
-	registerKeypair := func(_ context.Context, _, _, _ string, _ cloud.RegisterKeypairRequest) error {
-		called = true
-		return nil
-	}
-
 	code, _, stderr := runWithOptions(
-		[]string{"deploy", "--key-dir", dir, "--cloud-url", "https://cloud.example.com", "--device-api-key", "api-key"},
-		Options{GetHealth: getHealth, RegisterKeypair: registerKeypair},
+		[]string{"deploy", "--key-dir", dir, "--cloud-url", "https://cloud.example.com"},
+		Options{},
 	)
 	if code == 0 {
-		t.Fatal("expected failure without --yes")
+		t.Fatal("expected removed cloud mutation flag to fail")
 	}
-	if !strings.Contains(stderr, "--yes") {
-		t.Fatalf("expected --yes error, got stderr=%q", stderr)
+	if !strings.Contains(stderr, "unknown flag: --cloud-url") {
+		t.Fatalf("expected unknown cloud flag error, got stderr=%q", stderr)
 	}
-	if called {
-		t.Fatal("cloud registration should not be called without --yes")
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read key directory: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no key files after rejected flag, got %d entries", len(entries))
 	}
 }
 
-func TestDeployRequiresDeviceAPIKeyWithCloudURL(t *testing.T) {
-	dir := t.TempDir()
-	getHealth := healthyStatus("edge-cloud", "")
-
-	code, _, stderr := runWithOptions(
-		[]string{"deploy", "--key-dir", dir, "--cloud-url", "https://cloud.example.com", "--yes"},
-		Options{GetHealth: getHealth},
-	)
-	if code == 0 {
-		t.Fatal("expected failure without device API key")
-	}
-	if !strings.Contains(stderr, "device-api-key") && !strings.Contains(stderr, "ORI_DEVICE_API_KEY") {
-		t.Fatalf("expected device API key error, got stderr=%q", stderr)
-	}
-}
-
-func TestDeployRequiresCloudURLWithDeviceAPIKey(t *testing.T) {
-	dir := t.TempDir()
-	getHealth := healthyStatus("edge-cloud", "")
-
-	code, _, stderr := runWithOptions(
-		[]string{"deploy", "--key-dir", dir, "--device-api-key", "api-key", "--yes"},
-		Options{GetHealth: getHealth},
-	)
-	if code == 0 {
-		t.Fatal("expected failure without cloud URL")
-	}
-	if !strings.Contains(stderr, "cloud-url") && !strings.Contains(stderr, "ORI_CLOUD_URL") {
-		t.Fatalf("expected cloud URL error, got stderr=%q", stderr)
-	}
-}
-
-func TestDeployCloudErrorReported(t *testing.T) {
-	dir := t.TempDir()
-	getHealth := healthyStatus("edge-cloud", "")
-
-	registerKeypair := func(_ context.Context, _, _, _ string, _ cloud.RegisterKeypairRequest) error {
-		return errors.New("cloud is down")
-	}
-
-	code, _, stderr := runWithOptions(
-		[]string{"deploy", "--key-dir", dir, "--cloud-url", "https://cloud.example.com", "--device-api-key", "api-key", "--yes"},
-		Options{GetHealth: getHealth, RegisterKeypair: registerKeypair},
-	)
-	if code == 0 {
-		t.Fatal("expected failure when cloud registration fails")
-	}
-	if !strings.Contains(stderr, "cloud keypair registration failed") {
-		t.Fatalf("expected cloud registration error, got stderr=%q", stderr)
-	}
-}
-
-func TestDeployCloudURLEnvVar(t *testing.T) {
-	dir := t.TempDir()
-	getHealth := healthyStatus("edge-env", "")
-	t.Setenv("ORI_CLOUD_URL", "https://cloud-env.example.com")
-	t.Setenv("ORI_DEVICE_API_KEY", "env-api-key")
-
-	var gotBaseURL, gotAPIKey string
-	registerKeypair := func(_ context.Context, baseURL, apiKey, _ string, _ cloud.RegisterKeypairRequest) error {
-		gotBaseURL = baseURL
-		gotAPIKey = apiKey
-		return nil
-	}
-
-	code, _, stderr := runWithOptions(
-		[]string{"deploy", "--key-dir", dir, "--yes"},
-		Options{GetHealth: getHealth, RegisterKeypair: registerKeypair},
-	)
-	if code != 0 {
-		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
-	}
-	if gotBaseURL != "https://cloud-env.example.com" {
-		t.Fatalf("baseURL = %q, want https://cloud-env.example.com", gotBaseURL)
-	}
-	if gotAPIKey != "env-api-key" {
-		t.Fatalf("apiKey = %q, want env-api-key", gotAPIKey)
-	}
-}
-
-func TestDeployNoCloudURLSkipsRegistration(t *testing.T) {
+func TestDeployReportsCloudRegistrationDeferred(t *testing.T) {
 	dir := t.TempDir()
 	getHealth := healthyStatus("edge-local", "")
 
-	called := false
-	registerKeypair := func(_ context.Context, _, _, _ string, _ cloud.RegisterKeypairRequest) error {
-		called = true
-		return nil
-	}
-
-	code, stdout, _ := runWithOptions(
+	code, stdout, stderr := runWithOptions(
 		[]string{"deploy", "--key-dir", dir},
-		Options{GetHealth: getHealth, RegisterKeypair: registerKeypair},
+		Options{GetHealth: getHealth},
 	)
 	if code != 0 {
-		t.Fatalf("expected success, got code=%d", code)
+		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
 	}
-	if called {
-		t.Fatal("cloud registration should not be called without cloud URL")
-	}
-	if !strings.Contains(stdout, "not configured") {
-		t.Fatalf("expected not configured message, got %q", stdout)
+	if !strings.Contains(stdout, "Cloud registration: deferred pending a pinned authenticated ori-cloud contract.") {
+		t.Fatalf("expected explicit deferred registration message, got %q", stdout)
 	}
 }
 

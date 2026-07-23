@@ -6,6 +6,8 @@ package deploy
 import (
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,6 +95,119 @@ func TestEnsureKeypairReusesExistingValidPair(t *testing.T) {
 	}
 }
 
+func TestEnsureKeypairRejectsOverPermissiveExistingPrivateKey(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+	if _, _, err := ks.EnsureKeypair(false); err != nil {
+		t.Fatalf("first EnsureKeypair failed: %v", err)
+	}
+
+	privPath := filepath.Join(dir, PrivateKeyFile)
+	if err := os.Chmod(privPath, 0o644); err != nil {
+		t.Fatalf("make private key over-permissive: %v", err)
+	}
+
+	if _, _, err := ks.EnsureKeypair(false); err == nil {
+		t.Fatal("expected over-permissive private key to fail closed")
+	} else if !strings.Contains(err.Error(), "require 0600") {
+		t.Fatalf("expected restrictive-permissions error, got %v", err)
+	}
+	info, err := os.Lstat(privPath)
+	if err != nil {
+		t.Fatalf("private key should remain for operator recovery: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("private key mode changed unexpectedly: got %04o", info.Mode().Perm())
+	}
+}
+
+func TestEnsureKeypairRejectsSymlinkedPrivateKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires privileges on some Windows environments")
+	}
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+	if _, _, err := ks.EnsureKeypair(false); err != nil {
+		t.Fatalf("first EnsureKeypair failed: %v", err)
+	}
+
+	privPath := filepath.Join(dir, PrivateKeyFile)
+	targetPath := filepath.Join(dir, "external-device.key")
+	if err := os.Rename(privPath, targetPath); err != nil {
+		t.Fatalf("move private key target: %v", err)
+	}
+	if err := os.Symlink(targetPath, privPath); err != nil {
+		t.Fatalf("create private key symlink: %v", err)
+	}
+
+	if _, _, err := ks.EnsureKeypair(false); err == nil {
+		t.Fatal("expected symlinked private key to fail closed")
+	} else if !strings.Contains(err.Error(), "regular non-symlink") {
+		t.Fatalf("expected non-symlink error, got %v", err)
+	}
+	info, err := os.Lstat(privPath)
+	if err != nil {
+		t.Fatalf("lstat private key symlink: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("private key symlink should not be silently replaced")
+	}
+}
+
+func TestEnsureKeypairRefusesConcurrentWriter(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprintf("force=%t", force), func(t *testing.T) {
+			dir := t.TempDir()
+			ks := KeyStore{Dir: dir}
+			lock, err := ks.acquireLock()
+			if err != nil {
+				t.Fatalf("acquire first key store lock: %v", err)
+			}
+
+			if _, _, err := ks.EnsureKeypair(force); !errors.Is(err, errKeyStoreLocked) {
+				t.Fatalf("concurrent EnsureKeypair error = %v, want key-store lock refusal", err)
+			}
+			assertPathMissing(t, filepath.Join(dir, PrivateKeyFile))
+			assertPathMissing(t, filepath.Join(dir, PublicKeyFile))
+
+			if err := lock.release(); err != nil {
+				t.Fatalf("release first key store lock: %v", err)
+			}
+			if _, _, err := ks.EnsureKeypair(force); err != nil {
+				t.Fatalf("EnsureKeypair after lock release failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestEnsureKeypairRejectsSymlinkedLockFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires privileges on some Windows environments")
+	}
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+	targetPath := filepath.Join(dir, "lock-target")
+	if err := os.WriteFile(targetPath, []byte("do not chmod"), 0o644); err != nil {
+		t.Fatalf("write lock target: %v", err)
+	}
+	if err := os.Symlink(targetPath, filepath.Join(dir, privateKeyLockFile)); err != nil {
+		t.Fatalf("create lock symlink: %v", err)
+	}
+
+	if _, _, err := ks.EnsureKeypair(false); err == nil {
+		t.Fatal("expected symlinked lock file to fail closed")
+	} else if !strings.Contains(err.Error(), "regular non-symlink") {
+		t.Fatalf("expected non-symlink lock error, got %v", err)
+	}
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatalf("stat lock target: %v", err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("symlink target mode changed: got %04o, want 0644", info.Mode().Perm())
+	}
+}
+
 func TestEnsureKeypairForceOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
@@ -114,11 +229,30 @@ func TestEnsureKeypairForceOverwrites(t *testing.T) {
 	}
 }
 
-func TestEnsureKeypairDetectsMismatchedPair(t *testing.T) {
+func TestEnsureKeypairForceCreatesWhenNoPairExists(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
 
-	_, _, err := ks.EnsureKeypair(false)
+	pubHex, generated, err := ks.EnsureKeypair(true)
+	if err != nil {
+		t.Fatalf("force EnsureKeypair on empty store failed: %v", err)
+	}
+	if !generated {
+		t.Fatal("expected generated=true for force on an empty store")
+	}
+	if len(pubHex) != 64 {
+		t.Fatalf("public key hex length = %d, want 64", len(pubHex))
+	}
+	if _, err := ks.loadValidPair(); err != nil {
+		t.Fatalf("generated pair is not loadable: %v", err)
+	}
+}
+
+func TestEnsureKeypairRepairsPublicProjection(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+
+	original, _, err := ks.EnsureKeypair(false)
 	if err != nil {
 		t.Fatalf("EnsureKeypair failed: %v", err)
 	}
@@ -128,12 +262,15 @@ func TestEnsureKeypairDetectsMismatchedPair(t *testing.T) {
 		t.Fatalf("corrupt public key: %v", err)
 	}
 
-	_, _, err = ks.EnsureKeypair(false)
-	if err == nil {
-		t.Fatal("expected error for mismatched pair")
+	repaired, generated, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("repair mismatched public projection: %v", err)
 	}
-	if !strings.Contains(err.Error(), "inconsistent") {
-		t.Fatalf("expected inconsistent pair error, got: %v", err)
+	if generated {
+		t.Fatal("public projection repair must not rotate the private identity")
+	}
+	if repaired != original {
+		t.Fatalf("repaired public key = %q, want original %q", repaired, original)
 	}
 }
 
@@ -210,7 +347,7 @@ func TestLoadPrivateKeyRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEnsureKeypairRecoversPartialPrivateCommit(t *testing.T) {
+func TestEnsureKeypairRecoversCrashAfterPrivateBackup(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
 
@@ -220,20 +357,12 @@ func TestEnsureKeypairRecoversPartialPrivateCommit(t *testing.T) {
 	}
 
 	privPath := filepath.Join(dir, PrivateKeyFile)
-	pubPath := filepath.Join(dir, PublicKeyFile)
 	privBak := filepath.Join(dir, privateKeyBackupFile)
-	pubBak := filepath.Join(dir, publicKeyBackupFile)
 
-	// Simulate an interrupted force overwrite: backup exists, final private was
-	// committed, final public is missing.
+	// Simulate a crash immediately after the force path moves the authoritative
+	// private key to its backup. The old public projection remains in place.
 	if err := os.Rename(privPath, privBak); err != nil {
 		t.Fatalf("backup private: %v", err)
-	}
-	if err := os.Rename(pubPath, pubBak); err != nil {
-		t.Fatalf("backup public: %v", err)
-	}
-	if err := os.WriteFile(privPath, []byte("new-private-stub"), 0o600); err != nil {
-		t.Fatalf("write partial private: %v", err)
 	}
 
 	recovered, generated, err := ks.EnsureKeypair(false)
@@ -251,7 +380,7 @@ func TestEnsureKeypairRecoversPartialPrivateCommit(t *testing.T) {
 	}
 }
 
-func TestEnsureKeypairRecoversFromBackupsWhenFinalFilesMissing(t *testing.T) {
+func TestEnsureKeypairRecoversCrashAfterNewPrivateCommit(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
 
@@ -261,20 +390,24 @@ func TestEnsureKeypairRecoversFromBackupsWhenFinalFilesMissing(t *testing.T) {
 	}
 
 	privPath := filepath.Join(dir, PrivateKeyFile)
-	pubPath := filepath.Join(dir, PublicKeyFile)
 	privBak := filepath.Join(dir, privateKeyBackupFile)
-	pubBak := filepath.Join(dir, publicKeyBackupFile)
 
-	// Simulate an interrupted write after backups were taken but before any
-	// final file was renamed into place.
+	_, replacementPrivate, err := GenerateKeypair()
+	if err != nil {
+		t.Fatalf("generate replacement keypair: %v", err)
+	}
+	replacementTemp, err := ks.writeTempPrivateKey(replacementPrivate)
+	if err != nil {
+		t.Fatalf("write replacement private temp: %v", err)
+	}
+
+	// Simulate a crash after the new private key reaches its final path but
+	// before its public projection is committed.
 	if err := os.Rename(privPath, privBak); err != nil {
 		t.Fatalf("backup private: %v", err)
 	}
-	if err := os.Rename(pubPath, pubBak); err != nil {
-		t.Fatalf("backup public: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".device.key.tmp.123"), []byte("temp"), 0o600); err != nil {
-		t.Fatalf("write temp: %v", err)
+	if err := os.Rename(replacementTemp, privPath); err != nil {
+		t.Fatalf("commit replacement private: %v", err)
 	}
 
 	recovered, generated, err := ks.EnsureKeypair(false)
@@ -287,6 +420,55 @@ func TestEnsureKeypairRecoversFromBackupsWhenFinalFilesMissing(t *testing.T) {
 	if recovered != oldPub {
 		t.Fatalf("recovered public key = %q, want %q", recovered, oldPub)
 	}
+}
+
+func TestEnsureKeypairFinalizesCommittedReplacement(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+
+	if _, _, err := ks.EnsureKeypair(false); err != nil {
+		t.Fatalf("first EnsureKeypair failed: %v", err)
+	}
+
+	privPath := filepath.Join(dir, PrivateKeyFile)
+	pubPath := filepath.Join(dir, PublicKeyFile)
+	privBak := filepath.Join(dir, privateKeyBackupFile)
+	replacementPub, replacementPrivate, err := GenerateKeypair()
+	if err != nil {
+		t.Fatalf("generate replacement keypair: %v", err)
+	}
+	replacementPrivTemp, err := ks.writeTempPrivateKey(replacementPrivate)
+	if err != nil {
+		t.Fatalf("write replacement private temp: %v", err)
+	}
+	replacementPubTemp, err := ks.writeTempPublicKey(replacementPub)
+	if err != nil {
+		t.Fatalf("write replacement public temp: %v", err)
+	}
+
+	// Simulate a crash after both final files are committed but before the old
+	// private-key backup is removed.
+	if err := os.Rename(privPath, privBak); err != nil {
+		t.Fatalf("backup private: %v", err)
+	}
+	if err := os.Rename(replacementPrivTemp, privPath); err != nil {
+		t.Fatalf("commit replacement private: %v", err)
+	}
+	if err := os.Rename(replacementPubTemp, pubPath); err != nil {
+		t.Fatalf("commit replacement public: %v", err)
+	}
+
+	recovered, generated, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("recovery EnsureKeypair failed: %v", err)
+	}
+	if generated {
+		t.Fatal("expected committed replacement to be reused, not generated")
+	}
+	if recovered != replacementPub {
+		t.Fatalf("recovered public key = %q, want replacement %q", recovered, replacementPub)
+	}
+	assertPathMissing(t, privBak)
 }
 
 func TestEnsureKeypairForceRemovesBackupsOnSuccess(t *testing.T) {
@@ -301,36 +483,65 @@ func TestEnsureKeypairForceRemovesBackupsOnSuccess(t *testing.T) {
 		t.Fatalf("force EnsureKeypair failed: %v", err)
 	}
 
-	if fileExists(filepath.Join(dir, privateKeyBackupFile)) {
-		t.Fatal("private backup should be removed after successful force overwrite")
-	}
-	if fileExists(filepath.Join(dir, publicKeyBackupFile)) {
-		t.Fatal("public backup should be removed after successful force overwrite")
-	}
+	assertPathMissing(t, filepath.Join(dir, privateKeyBackupFile))
 }
 
-func TestEnsureKeypairRecoversPartialInitialCreation(t *testing.T) {
+func TestEnsureKeypairRepairsMissingPublicFromValidPrivate(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
 
-	// Simulate an interrupted initial write: final private was committed but
-	// final public was not, and no backup exists.
-	privPath := filepath.Join(dir, PrivateKeyFile)
-	if err := os.WriteFile(privPath, []byte("partial-private-stub"), 0o600); err != nil {
-		t.Fatalf("write partial private: %v", err)
+	original, _, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("first EnsureKeypair failed: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, PublicKeyFile)); err != nil {
+		t.Fatalf("remove public projection: %v", err)
 	}
 
-	pubHex, generated, err := ks.EnsureKeypair(false)
+	repaired, generated, err := ks.EnsureKeypair(false)
 	if err != nil {
 		t.Fatalf("recovery EnsureKeypair failed: %v", err)
 	}
-	if !generated {
-		t.Fatal("expected recovery to generate a fresh pair after partial initial creation")
+	if generated {
+		t.Fatal("missing public projection must not rotate the private identity")
 	}
-	if len(pubHex) != 64 {
-		t.Fatalf("public key hex length = %d, want 64", len(pubHex))
+	if repaired != original {
+		t.Fatalf("repaired public key = %q, want original %q", repaired, original)
 	}
 	if _, err := ks.loadValidPair(); err != nil {
 		t.Fatalf("recovered pair is not loadable: %v", err)
+	}
+}
+
+func TestEnsureKeypairRejectsCorruptPrivateWithoutDeletingIt(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+	privPath := filepath.Join(dir, PrivateKeyFile)
+	corrupt := []byte("partial-private-stub")
+	if err := os.WriteFile(privPath, corrupt, 0o600); err != nil {
+		t.Fatalf("write corrupt private key: %v", err)
+	}
+
+	if _, _, err := ks.EnsureKeypair(false); err == nil {
+		t.Fatal("expected corrupt authoritative private key to fail closed")
+	}
+	got, err := os.ReadFile(privPath)
+	if err != nil {
+		t.Fatalf("corrupt private key should remain for operator recovery: %v", err)
+	}
+	if string(got) != string(corrupt) {
+		t.Fatalf("corrupt private key changed: got %q, want %q", got, corrupt)
+	}
+	assertPathMissing(t, filepath.Join(dir, PublicKeyFile))
+}
+
+func assertPathMissing(t *testing.T, path string) {
+	t.Helper()
+	exists, err := pathExists(path)
+	if err != nil {
+		t.Fatalf("inspect %s: %v", path, err)
+	}
+	if exists {
+		t.Fatalf("expected %s to be absent", path)
 	}
 }

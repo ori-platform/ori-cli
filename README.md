@@ -25,7 +25,10 @@ validate skills, or inspect runtime state independently.
 - Command tree matching [`ori-specs/cli-commands/v1`](https://github.com/ori-platform/ori-specs/blob/main/cli-commands/v1.md).
 - Runtime health socket client boundary for `ori doctor runtime-health`.
 - Runtime bridge subprocess boundary for config and skill delegation.
-- Cloud client boundary for token/deploy commands.
+- Authenticated runtime socket client for firmware MQTT transport-identity
+  provisioning.
+- Local device-identity key generation for deploy preparation; cloud
+  registration remains deferred.
 - Offline token-use invariant test: no network call path.
 - CI, shell hygiene checks, license headers, and contribution guardrails.
 - Branded first-run terminal welcome that respects `NO_COLOR`, JSON output, CI,
@@ -36,7 +39,58 @@ validate skills, or inspect runtime state independently.
 - SQLite state queries.
 - Skills Hub install flow.
 - ori-cloud token/deploy endpoints.
-- Device keypair provisioning.
+- Physical-device delivery and HIL provisioning proof.
+
+## Device Deployment Identity
+
+`ori deploy` prepares the device-local Ed25519 identity used by the future
+ori-cloud registration flow. Before writing key material, it reads the runtime
+health socket and requires a device ID. When the evidence layer is enabled, it
+also requires the runtime to report an available 32-byte public verification
+anchor.
+
+The private key is stored as `~/.ori/device.key` with mode `0600`; the derived
+public key is stored as `~/.ori/device.pub`. Re-running the command reuses the
+existing identity. `--force` performs a crash-recoverable replacement that
+retains the previous private identity until the new private/public pair reaches
+its commit point.
+
+The command reports the device identity public key and the distinct evidence
+verification anchor. It does not call ori-cloud: the authenticated request and
+response contract for registration is not yet pinned. `--dry-run` generates a
+temporary public key for inspection without reading runtime health or writing
+files.
+
+## Firmware MQTT Transport Identity
+
+`ori firmware mqtt` drives the runtime-owned provisioning workflow. The CLI is
+only an authenticated operator client: it does not sign firmware messages,
+issue certificates, allocate provisioning sequences, inspect runtime storage,
+or handle issuer and device private keys.
+
+The operator flow is:
+
+```text
+create-csr
+  -> deliver the signed request to the device
+  -> prepare-install with the device CSR response
+  -> deliver the signed install request to the device
+  -> verify-install-result with the device result
+```
+
+Revocation uses `revoke` followed by `verify-revoke-result`. Public status uses
+`status` followed by `verify-status-response`. Each follow-up supplies the
+runtime-issued correlation ID and the canonical base64 device response. The
+runtime derives the audit actor from the authenticated Unix peer; the CLI has
+no `actor` option.
+
+Use `--output json` for the complete typed runtime envelope. A command exits
+nonzero for runtime errors, authenticated refusals, and install or revoke
+results whose verdict is not exactly `accepted`.
+
+MQTT client identity is transport defence in depth. It does not grant Layer 1
+evidence trust or Tier B/C/D action authority. Real-device delivery and HIL
+proof remain firmware bench work.
 
 ## Development
 

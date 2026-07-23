@@ -6,11 +6,9 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/ori-platform/ori-cli/internal/cloud"
 	"github.com/ori-platform/ori-cli/internal/deploy"
 	"github.com/ori-platform/ori-cli/internal/output"
 	"github.com/ori-platform/ori-cli/internal/rpc"
@@ -23,25 +21,23 @@ func newDeployCommand(state *rootState) *cobra.Command {
 		Short: "Provision a device deployment",
 		Long: `Generate the device identity Ed25519 keypair on-device, read the
 runtime health snapshot to obtain the device ID and evidence layer verification
-anchor, and optionally register the public identity key with ori-cloud.
+anchor, and report the public material needed for later registration.
 
 The private key is written with restrictive permissions and never leaves the
-device. It is never included in any cloud registration payload, log message, or
-stdout/stderr output.
+device. It is never included in output or any network request.
 
 Use --dry-run to preview the public key without writing files, reading the
-runtime health socket, or making network calls. Cloud registration requires both
---cloud-url and --device-api-key and an explicit --yes flag (or noninteractive
-mode).`,
+runtime health socket, or making network calls.
+
+Cloud registration is deliberately deferred until ori-cloud implements a pinned
+authenticated request and response contract. This command makes no cloud
+mutation.`,
 	}
 
 	cmd.Flags().String("key-dir", "", "directory for device key material (default ~/.ori)")
 	cmd.Flags().Bool("force", false, "overwrite existing device keys")
 	cmd.Flags().Bool("dry-run", false, "generate keys without writing files or calling cloud")
 	cmd.Flags().String("socket", rpc.DefaultHealthSocket, "runtime health Unix socket path")
-	cmd.Flags().String("cloud-url", "", "ori-cloud base URL (also ORI_CLOUD_URL)")
-	cmd.Flags().String("device-api-key", "", "device API key for cloud keypair registration (also ORI_DEVICE_API_KEY)")
-	cmd.Flags().Bool("yes", false, "confirm cloud keypair registration without interactive prompt")
 
 	cmd.RunE = func(cmd *cobra.Command, _ []string) error {
 		keyDir, err := cmd.Flags().GetString("key-dir")
@@ -60,25 +56,6 @@ mode).`,
 		if err != nil {
 			return fmt.Errorf("failed to read --socket: %w", err)
 		}
-		cloudURL, err := cmd.Flags().GetString("cloud-url")
-		if err != nil {
-			return fmt.Errorf("failed to read --cloud-url: %w", err)
-		}
-		if cloudURL == "" {
-			cloudURL = os.Getenv("ORI_CLOUD_URL")
-		}
-		deviceAPIKey, err := cmd.Flags().GetString("device-api-key")
-		if err != nil {
-			return fmt.Errorf("failed to read --device-api-key: %w", err)
-		}
-		if deviceAPIKey == "" {
-			deviceAPIKey = os.Getenv("ORI_DEVICE_API_KEY")
-		}
-		yes, err := cmd.Flags().GetBool("yes")
-		if err != nil {
-			return fmt.Errorf("failed to read --yes: %w", err)
-		}
-
 		if dryRun {
 			pubHex, _, err := deploy.GenerateKeypair()
 			if err != nil {
@@ -113,6 +90,9 @@ mode).`,
 		if err != nil {
 			return fmt.Errorf("runtime health unavailable: %w", err)
 		}
+		if !health.Canonical {
+			return fmt.Errorf("runtime health did not return the canonical v1 envelope required for deployment")
+		}
 		if health.DeviceID == "" {
 			return fmt.Errorf("runtime health did not report a device_id")
 		}
@@ -123,6 +103,8 @@ mode).`,
 			if !isLowerHex64(health.Evidence.PublicKeyHex) {
 				return fmt.Errorf("evidence layer verification anchor must be exactly 64 lowercase hexadecimal characters")
 			}
+		} else if health.Evidence.Available || health.Evidence.PublicKeyHex != "" {
+			return fmt.Errorf("evidence layer is disabled but runtime health reported active evidence material")
 		}
 
 		// Ensure a usable keypair exists. If a valid pair is already present and
@@ -132,33 +114,9 @@ mode).`,
 			return err
 		}
 
-		// Cloud registration is opt-in and requires explicit consent.
-		cloudRegistered := false
-		if cloudURL != "" || deviceAPIKey != "" {
-			if cloudURL == "" {
-				return fmt.Errorf("--device-api-key requires --cloud-url or ORI_CLOUD_URL")
-			}
-			if deviceAPIKey == "" {
-				return fmt.Errorf("--cloud-url requires --device-api-key or ORI_DEVICE_API_KEY")
-			}
-			if !yes {
-				return fmt.Errorf("cloud keypair registration requires explicit --yes flag")
-			}
-			req := cloud.RegisterKeypairRequest{
-				IdentityPubKeyHex: pubHex,
-			}
-			if err := state.registerKeypair(ctx, cloudURL, deviceAPIKey, health.DeviceID, req); err != nil {
-				return fmt.Errorf("cloud keypair registration failed: %w", err)
-			}
-			cloudRegistered = true
-		}
-
-		message := "device identity keypair ready; configure --cloud-url and --device-api-key with --yes to register with ori-cloud"
-		if cloudRegistered {
-			message = "device identity keypair generated and registered with ori-cloud"
-		}
-		if !generated && !cloudRegistered {
-			message = "device identity keypair already present; configure --cloud-url and --device-api-key with --yes to register with ori-cloud"
+		message := "device identity keypair ready; cloud registration is deferred until its authenticated contract is pinned"
+		if !generated {
+			message = "device identity keypair already present; cloud registration is deferred until its authenticated contract is pinned"
 		}
 
 		if state.json {
@@ -169,7 +127,7 @@ mode).`,
 				"identity_pubkey_hex": pubHex,
 				"evidence_pubkey_hex": health.Evidence.PublicKeyHex,
 				"key_dir":             ks.Dir,
-				"cloud_registered":    cloudRegistered,
+				"cloud_registration":  "deferred",
 				"message":             message,
 			})
 		}
@@ -188,11 +146,7 @@ mode).`,
 		}
 		fmt.Fprintf(state.stdout, "Private key: %s\n", filepath.Join(ks.Dir, deploy.PrivateKeyFile))
 		fmt.Fprintf(state.stdout, "Public key:  %s\n", filepath.Join(ks.Dir, deploy.PublicKeyFile))
-		if cloudRegistered {
-			fmt.Fprintln(state.stdout, "Cloud registration: successful.")
-		} else {
-			fmt.Fprintln(state.stdout, "Cloud registration: not configured; provide --cloud-url, --device-api-key, and --yes to register.")
-		}
+		fmt.Fprintln(state.stdout, "Cloud registration: deferred pending a pinned authenticated ori-cloud contract.")
 		return nil
 	}
 

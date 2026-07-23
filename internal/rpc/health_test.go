@@ -84,6 +84,9 @@ func TestParseHealthReadsWrappedEnvelope(t *testing.T) {
 	if got.Evidence.PublicKeyHex != "aabbccdd" {
 		t.Fatalf("Evidence.PublicKeyHex = %q, want aabbccdd", got.Evidence.PublicKeyHex)
 	}
+	if !got.Canonical {
+		t.Fatal("expected wrapped v1 response to be marked canonical")
+	}
 }
 
 func TestParseHealthReadsFlatLegacyResponse(t *testing.T) {
@@ -98,19 +101,19 @@ func TestParseHealthReadsFlatLegacyResponse(t *testing.T) {
 	if got.DeviceID != "edge-3" {
 		t.Fatalf("DeviceID = %q, want edge-3", got.DeviceID)
 	}
+	if got.Canonical {
+		t.Fatal("legacy flat response must not be marked canonical")
+	}
 }
 
-func TestParseHealthHandlesMissingEvidence(t *testing.T) {
+func TestParseHealthRejectsMissingEvidence(t *testing.T) {
 	payload := []byte(`{"schema_version":1,"ok":true,"health":{"device_id":"edge-4"}}` + "\n")
-	got, err := ParseHealth(payload)
-	if err != nil {
-		t.Fatalf("ParseHealth: %v", err)
+	_, err := ParseHealth(payload)
+	if err == nil {
+		t.Fatal("expected missing canonical evidence object to fail closed")
 	}
-	if got.DeviceID != "edge-4" {
-		t.Fatalf("DeviceID = %q, want edge-4", got.DeviceID)
-	}
-	if got.Evidence.PublicKeyHex != "" {
-		t.Fatalf("expected empty evidence public key, got %q", got.Evidence.PublicKeyHex)
+	if !strings.Contains(err.Error(), "missing required evidence object") {
+		t.Fatalf("expected missing evidence error, got %v", err)
 	}
 }
 
@@ -147,6 +150,17 @@ func TestParseHealthRejectsNonBooleanOk(t *testing.T) {
 	}
 }
 
+func TestParseHealthRejectsUnsupportedSchemaVersion(t *testing.T) {
+	payload := []byte(`{"schema_version":2,"ok":true,"health":{"device_id":"edge-5"}}` + "\n")
+	_, err := ParseHealth(payload)
+	if err == nil {
+		t.Fatal("expected error for unsupported schema_version")
+	}
+	if !strings.Contains(err.Error(), "unsupported schema_version") {
+		t.Fatalf("expected schema version error, got %v", err)
+	}
+}
+
 func TestParseHealthRejectsMissingHealth(t *testing.T) {
 	payload := []byte(`{"schema_version":1,"ok":true,"device_id":"edge-6"}` + "\n")
 	_, err := ParseHealth(payload)
@@ -155,6 +169,85 @@ func TestParseHealthRejectsMissingHealth(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "health is missing or not an object") {
 		t.Fatalf("expected missing health error, got %v", err)
+	}
+}
+
+func TestParseHealthRejectsMalformedEvidenceFields(t *testing.T) {
+	tests := []struct {
+		name     string
+		evidence string
+		want     string
+	}{
+		{
+			name:     "evidence is not object",
+			evidence: `"enabled"`,
+			want:     "evidence field is not an object",
+		},
+		{
+			name:     "enabled is not boolean",
+			evidence: `{"enabled":"true","available":false,"public_key_hex":""}`,
+			want:     "enabled field is not boolean",
+		},
+		{
+			name:     "available is not boolean",
+			evidence: `{"enabled":true,"available":1,"public_key_hex":""}`,
+			want:     "available field is not boolean",
+		},
+		{
+			name:     "public key is not string",
+			evidence: `{"enabled":true,"available":true,"public_key_hex":false}`,
+			want:     "public_key_hex field is not a string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"schema_version":1,"ok":true,"health":{"device_id":"edge-7","evidence":` + tt.evidence + `}}`)
+			_, err := ParseHealth(payload)
+			if err == nil {
+				t.Fatal("expected malformed evidence field to fail closed")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q error, got %v", tt.want, err)
+			}
+		})
+	}
+}
+
+func TestParseHealthRejectsMissingRequiredEvidenceFields(t *testing.T) {
+	tests := []struct {
+		name     string
+		evidence string
+		want     string
+	}{
+		{
+			name:     "enabled",
+			evidence: `{"available":false,"public_key_hex":""}`,
+			want:     "missing required enabled field",
+		},
+		{
+			name:     "available",
+			evidence: `{"enabled":false,"public_key_hex":""}`,
+			want:     "missing required available field",
+		},
+		{
+			name:     "public key",
+			evidence: `{"enabled":false,"available":false}`,
+			want:     "missing required public_key_hex field",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"schema_version":1,"ok":true,"health":{"device_id":"edge-8","evidence":` + tt.evidence + `}}`)
+			_, err := ParseHealth(payload)
+			if err == nil {
+				t.Fatal("expected missing evidence field to fail closed")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q error, got %v", tt.want, err)
+			}
+		})
 	}
 }
 

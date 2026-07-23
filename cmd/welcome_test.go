@@ -5,9 +5,11 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWantsJSONOutputSuppressesWelcome(t *testing.T) {
@@ -42,6 +44,30 @@ func TestShouldSkipWelcomeForNonInteractiveWriter(t *testing.T) {
 	var stdout bytes.Buffer
 	if !shouldSkipWelcome(nil, &stdout) {
 		t.Fatal("expected noninteractive writer to skip welcome")
+	}
+}
+
+func TestShouldSkipWelcomeInCI(t *testing.T) {
+	t.Setenv("CI", "true")
+	if !shouldSkipWelcome(nil, &bytes.Buffer{}) {
+		t.Fatal("expected CI to skip welcome")
+	}
+}
+
+func TestShouldSkipWelcomeEscapeHatch(t *testing.T) {
+	t.Setenv("ORI_CLI_NO_WELCOME", "1")
+	if !shouldSkipWelcome(nil, &bytes.Buffer{}) {
+		t.Fatal("expected ORI_CLI_NO_WELCOME to skip welcome")
+	}
+}
+
+func TestWelcomeAnimationRequiresColorTerminal(t *testing.T) {
+	var output bytes.Buffer
+	if shouldAnimateWelcome(&output, true) {
+		t.Fatal("expected non-terminal writer to skip animation")
+	}
+	if shouldAnimateWelcome(&output, false) {
+		t.Fatal("expected NO_COLOR mode to skip animation")
 	}
 }
 
@@ -127,6 +153,48 @@ func TestWelcomeLogoStaysAlignedWithColor(t *testing.T) {
 		if stripANSI(line) != plainLines[index] {
 			t.Fatalf("line %d misaligned once color is stripped:\ncolored: %q\nplain:   %q",
 				index, stripANSI(line), plainLines[index])
+		}
+	}
+}
+
+func TestWelcomeAnimationUsesBoundedRevealAndColorRamp(t *testing.T) {
+	const width = 80
+	var output bytes.Buffer
+	var delays []time.Duration
+
+	renderWelcomeAnimatedAt(
+		&output,
+		width,
+		func(delay time.Duration) {
+			delays = append(delays, delay)
+		},
+	)
+
+	wantDelayCount := (len(welcomeLogoRows) - 1) * 2
+	if len(delays) != wantDelayCount {
+		t.Fatalf("delay count = %d, want %d", len(delays), wantDelayCount)
+	}
+	var total time.Duration
+	for _, delay := range delays {
+		total += delay
+	}
+	if total >= welcomeAnimationMax {
+		t.Fatalf("animation delay budget = %s, must be under %s", total, welcomeAnimationMax)
+	}
+	if !strings.Contains(output.String(), fmt.Sprintf("\x1b[%dA", len(welcomeLogoRows))) {
+		t.Fatalf("animation does not return to the first logo row: %q", output.String())
+	}
+	if count := strings.Count(output.String(), "\x1b[2K"); count != len(welcomeLogoRows) {
+		t.Fatalf("row rewrite count = %d, want %d", count, len(welcomeLogoRows))
+	}
+	for _, want := range []string{
+		"\x1b[38;2;64;25;0m",
+		"\x1b[1;38;2;255;98;0m",
+		"Distributed infrastructure intelligence",
+		"Reason. Act. Prevent.",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("animated welcome missing %q", want)
 		}
 	}
 }
