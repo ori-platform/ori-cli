@@ -10,11 +10,18 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 )
 
 const welcomeMarkerVersion = "welcome-v1"
+
+const (
+	welcomeRevealDelay   = 30 * time.Millisecond
+	welcomeBrightenDelay = 18 * time.Millisecond
+	welcomeAnimationMax  = 250 * time.Millisecond
+)
 
 var ansiEscapePattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
@@ -32,10 +39,30 @@ func maybeShowFirstRunWelcome(args []string, stdout io.Writer, stderr io.Writer)
 	if err := os.MkdirAll(filepath.Dir(markerPath), 0o700); err != nil {
 		return
 	}
-	renderWelcome(stderr, colorEnabled())
+	useColor := colorEnabled()
+	if shouldAnimateWelcome(stderr, useColor) {
+		renderWelcomeAnimatedAt(stderr, terminalWidth(stderr), time.Sleep)
+	} else {
+		renderWelcome(stderr, useColor)
+	}
 	if err := os.WriteFile(markerPath, []byte("shown\n"), 0o600); err != nil {
 		return
 	}
+}
+
+func shouldAnimateWelcome(w io.Writer, useColor bool) bool {
+	if !useColor {
+		return false
+	}
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return stat.Mode()&os.ModeCharDevice != 0
 }
 
 func shouldSkipWelcome(args []string, stdout io.Writer) bool {
@@ -109,8 +136,51 @@ func renderWelcomeAt(w io.Writer, useColor bool, width int) {
 	logoPad := centerPad(width, welcomeLogoWidth())
 	fmt.Fprintln(w)
 	for _, row := range welcomeLogoRows {
-		fmt.Fprintln(w, logoPad+style.orange+row.o+style.reset+style.mint+row.r+style.reset+style.blue+row.i+style.reset)
+		fmt.Fprintln(w, formatWelcomeLogoRow(logoPad, style, row))
 	}
+	renderWelcomeBody(w, style, width)
+}
+
+func renderWelcomeAnimatedAt(
+	w io.Writer,
+	width int,
+	sleep func(time.Duration),
+) {
+	style := welcomeStyle(true)
+	dimStyle := welcomeDimLogoStyle()
+	logoPad := centerPad(width, welcomeLogoWidth())
+
+	fmt.Fprintln(w)
+	for index, row := range welcomeLogoRows {
+		fmt.Fprintln(w, formatWelcomeLogoRow(logoPad, dimStyle, row))
+		if index+1 < len(welcomeLogoRows) {
+			sleep(welcomeRevealDelay)
+		}
+	}
+
+	fmt.Fprintf(w, "\x1b[%dA", len(welcomeLogoRows))
+	for index, row := range welcomeLogoRows {
+		fmt.Fprint(w, "\r\x1b[2K")
+		fmt.Fprintln(w, formatWelcomeLogoRow(logoPad, style, row))
+		if index+1 < len(welcomeLogoRows) {
+			sleep(welcomeBrightenDelay)
+		}
+	}
+	renderWelcomeBody(w, style, width)
+}
+
+func formatWelcomeLogoRow(
+	logoPad string,
+	style welcomeColors,
+	row welcomeLogoRow,
+) string {
+	return logoPad +
+		style.orange + row.o + style.reset +
+		style.mint + row.r + style.reset +
+		style.blue + row.i + style.reset
+}
+
+func renderWelcomeBody(w io.Writer, style welcomeColors, width int) {
 	fmt.Fprintln(w)
 	tagline := "ORI  Distributed infrastructure intelligence"
 	motto := "Reason. Act. Prevent."
@@ -220,5 +290,14 @@ func welcomeStyle(useColor bool) welcomeColors {
 		amber:  "\x1b[1;38;2;232;154;60m",  // #e89a3c
 		white:  "\x1b[1;38;2;245;248;250m", // near-white
 		dim:    "\x1b[38;2;140;160;179m",   // #8ca0b3
+	}
+}
+
+func welcomeDimLogoStyle() welcomeColors {
+	return welcomeColors{
+		reset:  "\x1b[0m",
+		orange: "\x1b[38;2;64;25;0m",
+		mint:   "\x1b[38;2;0;48;41m",
+		blue:   "\x1b[38;2;19;39;58m",
 	}
 }
