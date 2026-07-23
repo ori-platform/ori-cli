@@ -27,7 +27,8 @@ validate skills, or inspect runtime state independently.
 - Runtime bridge subprocess boundary for config and skill delegation.
 - Authenticated runtime socket client for firmware MQTT transport-identity
   provisioning.
-- Cloud client boundary for token/deploy commands.
+- Local device-identity key generation for deploy preparation; cloud
+  registration remains deferred.
 - Offline token-use invariant test: no network call path.
 - CI, shell hygiene checks, license headers, and contribution guardrails.
 - Branded first-run terminal welcome that respects `NO_COLOR`, JSON output, CI,
@@ -39,6 +40,26 @@ validate skills, or inspect runtime state independently.
 - Skills Hub install flow.
 - ori-cloud token/deploy endpoints.
 - Physical-device delivery and HIL provisioning proof.
+
+## Device Deployment Identity
+
+`ori deploy` prepares the device-local Ed25519 identity used by the future
+ori-cloud registration flow. Before writing key material, it reads the runtime
+health socket and requires a device ID. When the evidence layer is enabled, it
+also requires the runtime to report an available 32-byte public verification
+anchor.
+
+The private key is stored as `~/.ori/device.key` with mode `0600`; the derived
+public key is stored as `~/.ori/device.pub`. Re-running the command reuses the
+existing identity. `--force` performs a crash-recoverable replacement that
+retains the previous private identity until the new private/public pair reaches
+its commit point.
+
+The command reports the device identity public key and the distinct evidence
+verification anchor. It does not call ori-cloud: the authenticated request and
+response contract for registration is not yet pinned. `--dry-run` generates a
+temporary public key for inspection without reading runtime health or writing
+files.
 
 ## Firmware MQTT Transport Identity
 
