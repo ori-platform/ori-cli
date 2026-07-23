@@ -66,14 +66,29 @@ func GetHealth(ctx context.Context, socketPath string) (RuntimeHealthStatus, err
 	return ParseHealth(line)
 }
 
-// ParseHealth parses a runtime health JSON response. It accepts both the
-// canonical wrapped envelope {"ok":true,"health":{...}} and the legacy flat
-// form {"status":"ok","device_id":"..."} so tests and older runtimes keep
-// working.
+// ParseHealth parses a runtime health JSON response. It accepts the canonical
+// wrapped envelope {"ok":true,"health":{...}}. For backward compatibility it
+// also accepts the legacy flat form {"status":"ok","device_id":"..."} when no
+// "ok" envelope field is present.
 func ParseHealth(payload []byte) (RuntimeHealthStatus, error) {
 	var envelope map[string]any
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return RuntimeHealthStatus{}, fmt.Errorf("decode runtime health JSON: %w", err)
+	}
+
+	// Reject explicit envelope failures from the runtime.
+	if ok, present := envelope["ok"].(bool); present && !ok {
+		code := "health_request_failed"
+		detail := "runtime health snapshot returned ok=false"
+		if errObj, ok := envelope["error"].(map[string]any); ok {
+			if c, ok := errObj["code"].(string); ok && c != "" {
+				code = c
+			}
+			if d, ok := errObj["detail"].(string); ok && d != "" {
+				detail = d
+			}
+		}
+		return RuntimeHealthStatus{}, fmt.Errorf("runtime health error %s: %s", code, detail)
 	}
 
 	// Canonical runtime response is wrapped in {"schema_version":1,"ok":true,"health":{...}}.

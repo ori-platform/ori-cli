@@ -113,3 +113,25 @@ func TestParseHealthHandlesMissingEvidence(t *testing.T) {
 		t.Fatalf("expected empty evidence public key, got %q", got.Evidence.PublicKeyHex)
 	}
 }
+
+func TestParseHealthRejectsOkFalse(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"ok":false,"error":{"code":"internal_error","detail":"snapshot failed"}}` + "\n")
+	_, err := ParseHealth(payload)
+	if err == nil {
+		t.Fatal("expected error for ok=false envelope")
+	}
+	if !strings.Contains(err.Error(), "internal_error") || !strings.Contains(err.Error(), "snapshot failed") {
+		t.Fatalf("expected structured error, got %v", err)
+	}
+}
+
+func TestParseHealthRejectsOkFalseWithoutErrorDetails(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"ok":false}` + "\n")
+	_, err := ParseHealth(payload)
+	if err == nil {
+		t.Fatal("expected error for ok=false envelope")
+	}
+	if !strings.Contains(err.Error(), "health_request_failed") {
+		t.Fatalf("expected default error code, got %v", err)
+	}
+}

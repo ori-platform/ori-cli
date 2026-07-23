@@ -4,6 +4,7 @@
 package deploy
 
 import (
+	"crypto/ed25519"
 	"encoding/hex"
 	"os"
 	"path/filepath"
@@ -12,15 +13,17 @@ import (
 	"testing"
 )
 
-func TestGenerateCreatesKeypairFiles(t *testing.T) {
+func TestEnsureKeypairCreatesKeypairFiles(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
 
-	pubHex, err := ks.Generate(false)
+	pubHex, generated, err := ks.EnsureKeypair(false)
 	if err != nil {
-		t.Fatalf("Generate failed: %v", err)
+		t.Fatalf("EnsureKeypair failed: %v", err)
 	}
-
+	if !generated {
+		t.Fatal("expected generated=true for new keypair")
+	}
 	if len(pubHex) != 64 {
 		t.Fatalf("public key hex length = %d, want 64", len(pubHex))
 	}
@@ -66,39 +69,71 @@ func TestGenerateCreatesKeypairFiles(t *testing.T) {
 	}
 }
 
-func TestGenerateRefusesOverwrite(t *testing.T) {
+func TestEnsureKeypairReusesExistingValidPair(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
 
-	if _, err := ks.Generate(false); err != nil {
-		t.Fatalf("first Generate failed: %v", err)
+	first, generated, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("first EnsureKeypair failed: %v", err)
+	}
+	if !generated {
+		t.Fatal("expected generated=true on first call")
 	}
 
-	_, err := ks.Generate(false)
-	if err == nil {
-		t.Fatal("expected second Generate to fail without force")
+	second, generated2, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("second EnsureKeypair failed: %v", err)
 	}
-	if !strings.Contains(err.Error(), "use --force") {
-		t.Fatalf("expected --force hint in error, got: %v", err)
+	if generated2 {
+		t.Fatal("expected generated=false when reusing existing pair")
+	}
+	if first != second {
+		t.Fatal("expected same public key on reuse")
 	}
 }
 
-func TestGenerateForceOverwrites(t *testing.T) {
+func TestEnsureKeypairForceOverwrites(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
 
-	first, err := ks.Generate(false)
+	first, _, err := ks.EnsureKeypair(false)
 	if err != nil {
-		t.Fatalf("first Generate failed: %v", err)
+		t.Fatalf("first EnsureKeypair failed: %v", err)
 	}
 
-	second, err := ks.Generate(true)
+	second, generated, err := ks.EnsureKeypair(true)
 	if err != nil {
-		t.Fatalf("force Generate failed: %v", err)
+		t.Fatalf("force EnsureKeypair failed: %v", err)
 	}
-
+	if !generated {
+		t.Fatal("expected generated=true for force overwrite")
+	}
 	if first == second {
 		t.Fatal("expected new keypair after force overwrite")
+	}
+}
+
+func TestEnsureKeypairDetectsMismatchedPair(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+
+	_, _, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("EnsureKeypair failed: %v", err)
+	}
+
+	pubPath := filepath.Join(dir, PublicKeyFile)
+	if err := os.WriteFile(pubPath, []byte("deadbeef\n"), 0o644); err != nil {
+		t.Fatalf("corrupt public key: %v", err)
+	}
+
+	_, _, err = ks.EnsureKeypair(false)
+	if err == nil {
+		t.Fatal("expected error for mismatched pair")
+	}
+	if !strings.Contains(err.Error(), "inconsistent") {
+		t.Fatalf("expected inconsistent pair error, got: %v", err)
 	}
 }
 
@@ -135,13 +170,13 @@ func TestGenerateKeypairDoesNotWriteFiles(t *testing.T) {
 	}
 }
 
-func TestGenerateCreatesKeyDirectory(t *testing.T) {
+func TestEnsureKeypairCreatesKeyDirectory(t *testing.T) {
 	dir := t.TempDir()
 	nested := filepath.Join(dir, "nested", "ori")
 	ks := KeyStore{Dir: nested}
 
-	if _, err := ks.Generate(false); err != nil {
-		t.Fatalf("Generate failed: %v", err)
+	if _, _, err := ks.EnsureKeypair(false); err != nil {
+		t.Fatalf("EnsureKeypair failed: %v", err)
 	}
 
 	if _, err := os.Stat(nested); err != nil {
@@ -149,28 +184,28 @@ func TestGenerateCreatesKeyDirectory(t *testing.T) {
 	}
 }
 
-func TestGenerateEmptyDirectoryFails(t *testing.T) {
+func TestEnsureKeypairEmptyDirectoryFails(t *testing.T) {
 	ks := KeyStore{}
-	_, err := ks.Generate(false)
+	_, _, err := ks.EnsureKeypair(false)
 	if err == nil {
-		t.Fatal("expected Generate to fail with empty directory")
+		t.Fatal("expected EnsureKeypair to fail with empty directory")
 	}
 }
 
-func TestPublicKeyReadsStoredKey(t *testing.T) {
+func TestLoadPrivateKeyRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	ks := KeyStore{Dir: dir}
 
-	pubHex, err := ks.Generate(false)
+	pubHex, _, err := ks.EnsureKeypair(false)
 	if err != nil {
-		t.Fatalf("Generate failed: %v", err)
+		t.Fatalf("EnsureKeypair failed: %v", err)
 	}
 
-	read, err := ks.PublicKey()
+	priv, err := ks.LoadPrivateKey()
 	if err != nil {
-		t.Fatalf("PublicKey failed: %v", err)
+		t.Fatalf("LoadPrivateKey failed: %v", err)
 	}
-	if strings.TrimSpace(read) != pubHex {
-		t.Fatalf("PublicKey = %q, want %q", read, pubHex)
+	if hex.EncodeToString(priv.Public().(ed25519.PublicKey)) != pubHex {
+		t.Fatal("loaded private key does not match stored public key")
 	}
 }

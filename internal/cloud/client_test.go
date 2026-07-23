@@ -13,18 +13,20 @@ import (
 	"testing"
 )
 
-func TestRegisterDevicePostsExpectedPayload(t *testing.T) {
-	var got RegisterDeviceRequest
+func TestRegisterKeypairPostsExpectedPayload(t *testing.T) {
+	var got RegisterKeypairRequest
+	var authHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %q, want POST", r.Method)
 		}
-		if r.URL.Path != registerDevicePath {
-			t.Errorf("path = %q, want %q", r.URL.Path, registerDevicePath)
+		if want := "/devices/edge-1/keypair"; r.URL.Path != want {
+			t.Errorf("path = %q, want %q", r.URL.Path, want)
 		}
 		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
 			t.Errorf("content-type = %q, want application/json", ct)
 		}
+		authHeader = r.Header.Get("Authorization")
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -41,15 +43,14 @@ func TestRegisterDevicePostsExpectedPayload(t *testing.T) {
 	defer server.Close()
 
 	client := New(server.URL)
-	req := RegisterDeviceRequest{
+	req := RegisterKeypairRequest{
 		DeviceID:          "edge-1",
 		IdentityPubKeyHex: "00112233",
-		EvidencePubKeyHex: "aabbccdd",
 		RegisteredAtMs:    1234,
 	}
-	resp, err := client.RegisterDevice(context.Background(), req)
+	resp, err := client.RegisterKeypair(context.Background(), "api-key-123", req)
 	if err != nil {
-		t.Fatalf("RegisterDevice failed: %v", err)
+		t.Fatalf("RegisterKeypair failed: %v", err)
 	}
 	if !resp.OK {
 		t.Fatal("expected OK response")
@@ -61,15 +62,15 @@ func TestRegisterDevicePostsExpectedPayload(t *testing.T) {
 	if got.IdentityPubKeyHex != req.IdentityPubKeyHex {
 		t.Fatalf("identity_pubkey_hex = %q, want %q", got.IdentityPubKeyHex, req.IdentityPubKeyHex)
 	}
-	if got.EvidencePubKeyHex != req.EvidencePubKeyHex {
-		t.Fatalf("evidence_pubkey_hex = %q, want %q", got.EvidencePubKeyHex, req.EvidencePubKeyHex)
-	}
 	if got.RegisteredAtMs != req.RegisteredAtMs {
 		t.Fatalf("registered_at_ms = %d, want %d", got.RegisteredAtMs, req.RegisteredAtMs)
 	}
+	if authHeader != "Bearer api-key-123" {
+		t.Fatalf("authorization header = %q, want Bearer api-key-123", authHeader)
+	}
 }
 
-func TestRegisterDeviceNeverContainsPrivateKey(t *testing.T) {
+func TestRegisterKeypairNeverContainsPrivateKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -86,24 +87,40 @@ func TestRegisterDeviceNeverContainsPrivateKey(t *testing.T) {
 	defer server.Close()
 
 	client := New(server.URL)
-	_, err := client.RegisterDevice(context.Background(), RegisterDeviceRequest{
+	_, err := client.RegisterKeypair(context.Background(), "api-key", RegisterKeypairRequest{
 		DeviceID:          "edge-1",
 		IdentityPubKeyHex: "00112233",
 	})
 	if err != nil {
-		t.Fatalf("RegisterDevice failed: %v", err)
+		t.Fatalf("RegisterKeypair failed: %v", err)
 	}
 }
 
-func TestRegisterDeviceReturnsErrorOnNon2xx(t *testing.T) {
+func TestRegisterKeypairRequiresDeviceAPIKey(t *testing.T) {
+	client := New("https://cloud.example.com")
+	_, err := client.RegisterKeypair(context.Background(), "", RegisterKeypairRequest{DeviceID: "edge-1"})
+	if err == nil {
+		t.Fatal("expected error without device API key")
+	}
+}
+
+func TestRegisterKeypairRequiresDeviceID(t *testing.T) {
+	client := New("https://cloud.example.com")
+	_, err := client.RegisterKeypair(context.Background(), "api-key", RegisterKeypairRequest{})
+	if err == nil {
+		t.Fatal("expected error without device ID")
+	}
+}
+
+func TestRegisterKeypairReturnsErrorOnNon2xx(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"error":"device already registered"}`))
+		_, _ = w.Write([]byte(`{"error":"keypair already registered"}`))
 	}))
 	defer server.Close()
 
 	client := New(server.URL)
-	_, err := client.RegisterDevice(context.Background(), RegisterDeviceRequest{DeviceID: "edge-1"})
+	_, err := client.RegisterKeypair(context.Background(), "api-key", RegisterKeypairRequest{DeviceID: "edge-1"})
 	if err == nil {
 		t.Fatal("expected error for non-2xx response")
 	}
@@ -112,9 +129,9 @@ func TestRegisterDeviceReturnsErrorOnNon2xx(t *testing.T) {
 	}
 }
 
-func TestRegisterDeviceReturnsErrorOnInvalidBaseURL(t *testing.T) {
+func TestRegisterKeypairReturnsErrorOnInvalidBaseURL(t *testing.T) {
 	client := New("://invalid-url")
-	_, err := client.RegisterDevice(context.Background(), RegisterDeviceRequest{})
+	_, err := client.RegisterKeypair(context.Background(), "api-key", RegisterKeypairRequest{DeviceID: "edge-1"})
 	if err == nil {
 		t.Fatal("expected error for invalid base URL")
 	}

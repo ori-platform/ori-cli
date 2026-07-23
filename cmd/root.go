@@ -24,20 +24,20 @@ type BridgeRunner interface {
 }
 
 type Options struct {
-	Bridge         BridgeRunner
-	GetHealth      func(context.Context, string) (rpc.RuntimeHealthStatus, error)
-	UseToken       func(string, token.UseOptions) (token.OfflineUseResult, error)
-	RegisterDevice func(context.Context, string, cloud.RegisterDeviceRequest) (cloud.RegisterDeviceResponse, error)
+	Bridge          BridgeRunner
+	GetHealth       func(context.Context, string) (rpc.RuntimeHealthStatus, error)
+	UseToken        func(string, token.UseOptions) (token.OfflineUseResult, error)
+	RegisterKeypair func(context.Context, string, string, cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error)
 }
 
 type rootState struct {
-	json           bool
-	stdout         io.Writer
-	stderr         io.Writer
-	bridge         BridgeRunner
-	getHealth      func(context.Context, string) (rpc.RuntimeHealthStatus, error)
-	useToken       func(string, token.UseOptions) (token.OfflineUseResult, error)
-	registerDevice func(context.Context, string, cloud.RegisterDeviceRequest) (cloud.RegisterDeviceResponse, error)
+	json            bool
+	stdout          io.Writer
+	stderr          io.Writer
+	bridge          BridgeRunner
+	getHealth       func(context.Context, string) (rpc.RuntimeHealthStatus, error)
+	useToken        func(string, token.UseOptions) (token.OfflineUseResult, error)
+	registerKeypair func(context.Context, string, string, cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error)
 }
 
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -48,12 +48,12 @@ func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts 
 	maybeShowFirstRunWelcome(args, stdout, stderr)
 
 	state := rootState{
-		stdout:         stdout,
-		stderr:         stderr,
-		bridge:         opts.Bridge,
-		getHealth:      opts.GetHealth,
-		useToken:       opts.UseToken,
-		registerDevice: opts.RegisterDevice,
+		stdout:          stdout,
+		stderr:          stderr,
+		bridge:          opts.Bridge,
+		getHealth:       opts.GetHealth,
+		useToken:        opts.UseToken,
+		registerKeypair: opts.RegisterKeypair,
 	}
 	if state.bridge == nil {
 		state.bridge = bridge.DefaultRunner()
@@ -64,8 +64,8 @@ func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts 
 	if state.useToken == nil {
 		state.useToken = token.UseOffline
 	}
-	if state.registerDevice == nil {
-		state.registerDevice = defaultRegisterDevice
+	if state.registerKeypair == nil {
+		state.registerKeypair = defaultRegisterKeypair
 	}
 
 	root := newRootCommand(&state)
@@ -150,6 +150,6 @@ func notImplemented(message string) error {
 	return errors.New("not yet implemented: " + message)
 }
 
-func defaultRegisterDevice(ctx context.Context, baseURL string, req cloud.RegisterDeviceRequest) (cloud.RegisterDeviceResponse, error) {
-	return cloud.New(baseURL).RegisterDevice(ctx, req)
+func defaultRegisterKeypair(ctx context.Context, baseURL, deviceAPIKey string, req cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error) {
+	return cloud.New(baseURL).RegisterKeypair(ctx, deviceAPIKey, req)
 }
