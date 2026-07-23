@@ -22,8 +22,8 @@ func newDeployCommand(state *rootState) *cobra.Command {
 		Use:   "deploy",
 		Short: "Provision a device deployment",
 		Long: `Generate the device identity Ed25519 keypair on-device, read the
-runtime health snapshot to obtain the device ID and Verity evidence anchor, and
-optionally register the public identity key with ori-cloud.
+runtime health snapshot to obtain the device ID and evidence layer verification
+anchor, and optionally register the public identity key with ori-cloud.
 
 The private key is written with restrictive permissions and never leaves the
 device. It is never included in any cloud registration payload, log message, or
@@ -116,8 +116,13 @@ mode).`,
 		if health.DeviceID == "" {
 			return fmt.Errorf("runtime health did not report a device_id")
 		}
-		if health.Evidence.Enabled && health.Evidence.PublicKeyHex == "" {
-			return fmt.Errorf("evidence signing is enabled but the evidence anchor public key is not available")
+		if health.Evidence.Enabled {
+			if !health.Evidence.Available {
+				return fmt.Errorf("evidence layer is enabled but the evidence state is not available")
+			}
+			if !isLowerHex64(health.Evidence.PublicKeyHex) {
+				return fmt.Errorf("evidence layer verification anchor must be exactly 64 lowercase hexadecimal characters")
+			}
 		}
 
 		// Ensure a usable keypair exists. If a valid pair is already present and
@@ -140,12 +145,9 @@ mode).`,
 				return fmt.Errorf("cloud keypair registration requires explicit --yes flag")
 			}
 			req := cloud.RegisterKeypairRequest{
-				DeviceID:          health.DeviceID,
 				IdentityPubKeyHex: pubHex,
-				RegisteredAtMs:    cloud.Now(),
 			}
-			_, err := state.registerKeypair(ctx, cloudURL, deviceAPIKey, req)
-			if err != nil {
+			if err := state.registerKeypair(ctx, cloudURL, deviceAPIKey, health.DeviceID, req); err != nil {
 				return fmt.Errorf("cloud keypair registration failed: %w", err)
 			}
 			cloudRegistered = true
@@ -195,4 +197,16 @@ mode).`,
 	}
 
 	return cmd
+}
+
+func isLowerHex64(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }

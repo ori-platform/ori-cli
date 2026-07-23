@@ -25,6 +25,12 @@ const (
 
 	// PublicKeyFile is the on-disk filename for the device identity public key.
 	PublicKeyFile = "device.pub"
+
+	// privateKeyBackupFile and publicKeyBackupFile are used to snapshot an
+	// existing pair during overwrite so a failed write can be rolled back without
+	// rotating the identity key.
+	privateKeyBackupFile = "device.key.bak"
+	publicKeyBackupFile  = "device.pub.bak"
 )
 
 // KeyStore handles on-device generation and persistence of the device identity
@@ -53,6 +59,12 @@ func DefaultKeyStore() KeyStore {
 func (ks KeyStore) EnsureKeypair(force bool) (pubHex string, generated bool, err error) {
 	if ks.Dir == "" {
 		return "", false, errors.New("key directory is not configured")
+	}
+
+	// Recover from any previous interrupted write so the store is always in a
+	// deterministically resumable state: either the old valid pair or no pair.
+	if err := ks.recover(); err != nil {
+		return "", false, fmt.Errorf("recover keypair state: %w", err)
 	}
 
 	privPath := filepath.Join(ks.Dir, PrivateKeyFile)
@@ -87,7 +99,7 @@ func (ks KeyStore) EnsureKeypair(force bool) (pubHex string, generated bool, err
 
 	pubHex = hex.EncodeToString(priv.Public().(ed25519.PublicKey))
 
-	if err := ks.writePair(priv, pubHex); err != nil {
+	if err := ks.writePair(priv, pubHex, force); err != nil {
 		return "", false, err
 	}
 
@@ -161,28 +173,51 @@ func (ks KeyStore) LoadPrivateKey() (ed25519.PrivateKey, error) {
 	return priv, nil
 }
 
-func (ks KeyStore) writePair(priv ed25519.PrivateKey, pubHex string) error {
+func (ks KeyStore) writePair(priv ed25519.PrivateKey, pubHex string, force bool) error {
 	privPath := filepath.Join(ks.Dir, PrivateKeyFile)
 	pubPath := filepath.Join(ks.Dir, PublicKeyFile)
+	privBak := filepath.Join(ks.Dir, privateKeyBackupFile)
+	pubBak := filepath.Join(ks.Dir, publicKeyBackupFile)
+
+	// Snapshot any existing pair so we can roll back to it if the write fails.
+	if force {
+		if err := ks.backupExisting(privPath, privBak); err != nil {
+			return fmt.Errorf("backup existing private key: %w", err)
+		}
+		if err := ks.backupExisting(pubPath, pubBak); err != nil {
+			_ = ks.restoreBackup(privBak, privPath)
+			return fmt.Errorf("backup existing public key: %w", err)
+		}
+	}
 
 	privTmp, err := ks.writeTempPrivateKey(priv)
 	if err != nil {
+		ks.rollback(force)
 		return err
 	}
 	pubTmp, err := ks.writeTempPublicKey(pubHex)
 	if err != nil {
 		_ = os.Remove(privTmp)
+		ks.rollback(force)
 		return err
 	}
 
 	if err := os.Rename(privTmp, privPath); err != nil {
 		_ = os.Remove(privTmp)
 		_ = os.Remove(pubTmp)
+		ks.rollback(force)
 		return fmt.Errorf("commit private key: %w", err)
 	}
 	if err := os.Rename(pubTmp, pubPath); err != nil {
-		_ = os.Remove(pubPath)
+		_ = os.Remove(pubTmp)
+		ks.rollback(force)
 		return fmt.Errorf("commit public key: %w", err)
+	}
+
+	// Success: remove the now-obsolete backup pair.
+	if force {
+		_ = os.Remove(privBak)
+		_ = os.Remove(pubBak)
 	}
 	return nil
 }
@@ -250,4 +285,114 @@ func trimHex(s string) string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// recover cleans up stale temp files and restores a consistent keypair state
+// from backups if a previous write was interrupted. After recovery the store
+// is in one of two states: both final files exist, or neither does.
+func (ks KeyStore) recover() error {
+	privPath := filepath.Join(ks.Dir, PrivateKeyFile)
+	pubPath := filepath.Join(ks.Dir, PublicKeyFile)
+	privBak := filepath.Join(ks.Dir, privateKeyBackupFile)
+	pubBak := filepath.Join(ks.Dir, publicKeyBackupFile)
+
+	_ = removeGlob(filepath.Join(ks.Dir, ".device.key.tmp.*"))
+	_ = removeGlob(filepath.Join(ks.Dir, ".device.pub.tmp.*"))
+
+	privExists := fileExists(privPath)
+	pubExists := fileExists(pubPath)
+	privBakExists := fileExists(privBak)
+	pubBakExists := fileExists(pubBak)
+
+	// Consistent final pair: remove any leftover backups and continue.
+	if privExists && pubExists {
+		_ = os.Remove(privBak)
+		_ = os.Remove(pubBak)
+		return nil
+	}
+
+	// Inconsistent final state. Restore the backup pair if we have one.
+	if privBakExists && pubBakExists {
+		if privExists {
+			_ = os.Remove(privPath)
+		}
+		if pubExists {
+			_ = os.Remove(pubPath)
+		}
+		if err := os.Rename(privBak, privPath); err != nil {
+			return err
+		}
+		if err := os.Rename(pubBak, pubPath); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// No usable backup; remove any partial final files and leftover backups.
+	if privExists {
+		_ = os.Remove(privPath)
+	}
+	if pubExists {
+		_ = os.Remove(pubPath)
+	}
+	_ = os.Remove(privBak)
+	_ = os.Remove(pubBak)
+	return nil
+}
+
+// backupExisting moves src to dst if src exists, removing any stale dst first.
+func (ks KeyStore) backupExisting(src, dst string) error {
+	if !fileExists(src) {
+		_ = os.Remove(dst)
+		return nil
+	}
+	if fileExists(dst) {
+		_ = os.Remove(dst)
+	}
+	return os.Rename(src, dst)
+}
+
+// restoreBackup moves backup back to final if the backup exists.
+func (ks KeyStore) restoreBackup(backupPath, finalPath string) error {
+	if !fileExists(backupPath) {
+		return nil
+	}
+	if fileExists(finalPath) {
+		_ = os.Remove(finalPath)
+	}
+	return os.Rename(backupPath, finalPath)
+}
+
+// rollback restores the backup pair when a force overwrite fails partway.
+func (ks KeyStore) rollback(force bool) {
+	if !force {
+		return
+	}
+	privPath := filepath.Join(ks.Dir, PrivateKeyFile)
+	pubPath := filepath.Join(ks.Dir, PublicKeyFile)
+	privBak := filepath.Join(ks.Dir, privateKeyBackupFile)
+	pubBak := filepath.Join(ks.Dir, publicKeyBackupFile)
+
+	// If only one final file was committed, it is the new partial key and must
+	// be removed so the old pair can be restored together.
+	if fileExists(privPath) && !fileExists(pubPath) {
+		_ = os.Remove(privPath)
+	}
+	if fileExists(pubPath) && !fileExists(privPath) {
+		_ = os.Remove(pubPath)
+	}
+
+	_ = ks.restoreBackup(privBak, privPath)
+	_ = ks.restoreBackup(pubBak, pubPath)
+}
+
+func removeGlob(pattern string) error {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return err
+	}
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+	return nil
 }

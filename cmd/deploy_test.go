@@ -149,8 +149,8 @@ func TestDeployFailsWhenEvidenceEnabledButAnchorMissing(t *testing.T) {
 	if code == 0 {
 		t.Fatal("expected failure when evidence enabled but anchor missing")
 	}
-	if !strings.Contains(stderr, "evidence anchor") {
-		t.Fatalf("expected evidence anchor error, got stderr=%q", stderr)
+	if !strings.Contains(stderr, "evidence layer is enabled") {
+		t.Fatalf("expected evidence state unavailable error, got stderr=%q", stderr)
 	}
 }
 
@@ -204,7 +204,7 @@ func TestDeployForceOverwrites(t *testing.T) {
 
 func TestDeployJSONOutput(t *testing.T) {
 	dir := t.TempDir()
-	getHealth := healthyStatus("edge-json", "0011")
+	getHealth := healthyStatus("edge-json", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	code, stdout, stderr := runWithOptions([]string{"--json", "deploy", "--key-dir", dir}, Options{GetHealth: getHealth})
 	if code != 0 {
 		t.Fatalf("expected success, got code=%d stderr=%q", code, stderr)
@@ -291,15 +291,16 @@ func TestDeployHelp(t *testing.T) {
 
 func TestDeployRegistersKeypairWithCloud(t *testing.T) {
 	dir := t.TempDir()
-	getHealth := healthyStatus("edge-cloud", "aabbccdd")
+	getHealth := healthyStatus("edge-cloud", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 
 	var got cloud.RegisterKeypairRequest
-	var gotBaseURL, gotAPIKey string
-	registerKeypair := func(_ context.Context, baseURL, apiKey string, req cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error) {
+	var gotBaseURL, gotAPIKey, gotDeviceID string
+	registerKeypair := func(_ context.Context, baseURL, apiKey, deviceID string, req cloud.RegisterKeypairRequest) error {
 		gotBaseURL = baseURL
 		gotAPIKey = apiKey
+		gotDeviceID = deviceID
 		got = req
-		return cloud.RegisterKeypairResponse{OK: true, DeviceID: req.DeviceID}, nil
+		return nil
 	}
 
 	code, stdout, stderr := runWithOptions(
@@ -316,8 +317,8 @@ func TestDeployRegistersKeypairWithCloud(t *testing.T) {
 	if gotAPIKey != "api-key-123" {
 		t.Fatalf("apiKey = %q, want api-key-123", gotAPIKey)
 	}
-	if got.DeviceID != "edge-cloud" {
-		t.Fatalf("DeviceID = %q, want edge-cloud", got.DeviceID)
+	if gotDeviceID != "edge-cloud" {
+		t.Fatalf("DeviceID = %q, want edge-cloud", gotDeviceID)
 	}
 	if len(got.IdentityPubKeyHex) != 64 {
 		t.Fatalf("IdentityPubKeyHex length = %d, want 64", len(got.IdentityPubKeyHex))
@@ -331,7 +332,7 @@ func TestDeployCloudPayloadNeverContainsPrivateKey(t *testing.T) {
 	dir := t.TempDir()
 	getHealth := healthyStatus("edge-cloud", "")
 
-	registerKeypair := func(_ context.Context, _, _ string, req cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error) {
+	registerKeypair := func(_ context.Context, _, _, _ string, req cloud.RegisterKeypairRequest) error {
 		body, _ := json.Marshal(req)
 		bodyStr := string(body)
 		for _, forbidden := range []string{"private", "BEGIN PRIVATE KEY", "secret"} {
@@ -339,7 +340,7 @@ func TestDeployCloudPayloadNeverContainsPrivateKey(t *testing.T) {
 				t.Fatalf("cloud payload contains forbidden fragment %q: %s", forbidden, bodyStr)
 			}
 		}
-		return cloud.RegisterKeypairResponse{OK: true}, nil
+		return nil
 	}
 
 	code, _, stderr := runWithOptions(
@@ -356,9 +357,9 @@ func TestDeployRequiresYesForCloudRegistration(t *testing.T) {
 	getHealth := healthyStatus("edge-cloud", "")
 
 	called := false
-	registerKeypair := func(_ context.Context, _, _ string, _ cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error) {
+	registerKeypair := func(_ context.Context, _, _, _ string, _ cloud.RegisterKeypairRequest) error {
 		called = true
-		return cloud.RegisterKeypairResponse{OK: true}, nil
+		return nil
 	}
 
 	code, _, stderr := runWithOptions(
@@ -412,8 +413,8 @@ func TestDeployCloudErrorReported(t *testing.T) {
 	dir := t.TempDir()
 	getHealth := healthyStatus("edge-cloud", "")
 
-	registerKeypair := func(_ context.Context, _, _ string, _ cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error) {
-		return cloud.RegisterKeypairResponse{}, errors.New("cloud is down")
+	registerKeypair := func(_ context.Context, _, _, _ string, _ cloud.RegisterKeypairRequest) error {
+		return errors.New("cloud is down")
 	}
 
 	code, _, stderr := runWithOptions(
@@ -435,10 +436,10 @@ func TestDeployCloudURLEnvVar(t *testing.T) {
 	t.Setenv("ORI_DEVICE_API_KEY", "env-api-key")
 
 	var gotBaseURL, gotAPIKey string
-	registerKeypair := func(_ context.Context, baseURL, apiKey string, _ cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error) {
+	registerKeypair := func(_ context.Context, baseURL, apiKey, _ string, _ cloud.RegisterKeypairRequest) error {
 		gotBaseURL = baseURL
 		gotAPIKey = apiKey
-		return cloud.RegisterKeypairResponse{OK: true}, nil
+		return nil
 	}
 
 	code, _, stderr := runWithOptions(
@@ -461,9 +462,9 @@ func TestDeployNoCloudURLSkipsRegistration(t *testing.T) {
 	getHealth := healthyStatus("edge-local", "")
 
 	called := false
-	registerKeypair := func(_ context.Context, _, _ string, _ cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error) {
+	registerKeypair := func(_ context.Context, _, _, _ string, _ cloud.RegisterKeypairRequest) error {
 		called = true
-		return cloud.RegisterKeypairResponse{OK: true}, nil
+		return nil
 	}
 
 	code, stdout, _ := runWithOptions(
@@ -478,5 +479,20 @@ func TestDeployNoCloudURLSkipsRegistration(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "not configured") {
 		t.Fatalf("expected not configured message, got %q", stdout)
+	}
+}
+
+func TestDeployFailsOnInvalidEvidenceAnchorFormat(t *testing.T) {
+	dir := t.TempDir()
+	getHealth := healthyStatus("edge-4", "aabbccdd")
+	code, _, stderr := runWithOptions([]string{"deploy", "--key-dir", dir}, Options{GetHealth: getHealth})
+	if code == 0 {
+		t.Fatal("expected failure for invalid evidence anchor format")
+	}
+	if !strings.Contains(stderr, "64 lowercase hexadecimal") {
+		t.Fatalf("expected hex anchor format error, got stderr=%q", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, deploy.PrivateKeyFile)); err == nil {
+		t.Fatal("private key should not be written when evidence anchor is invalid")
 	}
 }

@@ -14,7 +14,7 @@ import (
 const DefaultHealthSocket = "/run/ori/health.sock"
 
 // EvidenceStatus is the runtime health evidence block that describes the
-// Verity chain signing state on the device.
+// evidence layer signing state on the device.
 type EvidenceStatus struct {
 	Enabled      bool   `json:"enabled"`
 	Available    bool   `json:"available"`
@@ -68,45 +68,59 @@ func GetHealth(ctx context.Context, socketPath string) (RuntimeHealthStatus, err
 
 // ParseHealth parses a runtime health JSON response. It accepts the canonical
 // wrapped envelope {"ok":true,"health":{...}}. For backward compatibility it
-// also accepts the legacy flat form {"status":"ok","device_id":"..."} when no
-// "ok" envelope field is present.
+// also accepts the legacy flat form {"status":"ok","device_id":"..."} only
+// when the "ok" envelope field is entirely absent.
 func ParseHealth(payload []byte) (RuntimeHealthStatus, error) {
 	var envelope map[string]any
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return RuntimeHealthStatus{}, fmt.Errorf("decode runtime health JSON: %w", err)
 	}
 
-	// Reject explicit envelope failures from the runtime.
-	if ok, present := envelope["ok"].(bool); present && !ok {
-		code := "health_request_failed"
-		detail := "runtime health snapshot returned ok=false"
-		if errObj, ok := envelope["error"].(map[string]any); ok {
-			if c, ok := errObj["code"].(string); ok && c != "" {
-				code = c
-			}
-			if d, ok := errObj["detail"].(string); ok && d != "" {
-				detail = d
-			}
-		}
-		return RuntimeHealthStatus{}, fmt.Errorf("runtime health error %s: %s", code, detail)
-	}
-
 	// Canonical runtime response is wrapped in {"schema_version":1,"ok":true,"health":{...}}.
-	var raw map[string]any
-	if health, ok := envelope["health"].(map[string]any); ok {
-		raw = health
-	} else {
-		raw = envelope
+	if _, present := envelope["ok"]; present {
+		ok, okIsBool := envelope["ok"].(bool)
+		if !okIsBool {
+			return RuntimeHealthStatus{}, fmt.Errorf("runtime health envelope has non-boolean ok field")
+		}
+		if !ok {
+			code := "health_request_failed"
+			detail := "runtime health snapshot returned ok=false"
+			if errObj, ok := envelope["error"].(map[string]any); ok {
+				if c, ok := errObj["code"].(string); ok && c != "" {
+					code = c
+				}
+				if d, ok := errObj["detail"].(string); ok && d != "" {
+					detail = d
+				}
+			}
+			return RuntimeHealthStatus{}, fmt.Errorf("runtime health error %s: %s", code, detail)
+		}
+
+		health, healthIsObject := envelope["health"].(map[string]any)
+		if !healthIsObject {
+			return RuntimeHealthStatus{}, fmt.Errorf("runtime health envelope ok=true but health is missing or not an object")
+		}
+
+		status := RuntimeHealthStatus{Raw: envelope}
+		if value, ok := health["status"].(string); ok {
+			status.Status = value
+		}
+		if value, ok := health["device_id"].(string); ok {
+			status.DeviceID = value
+		}
+		status.Evidence = parseEvidence(health["evidence"])
+		return status, nil
 	}
 
+	// Legacy flat response without an envelope wrapper.
 	status := RuntimeHealthStatus{Raw: envelope}
-	if value, ok := raw["status"].(string); ok {
+	if value, ok := envelope["status"].(string); ok {
 		status.Status = value
 	}
-	if value, ok := raw["device_id"].(string); ok {
+	if value, ok := envelope["device_id"].(string); ok {
 		status.DeviceID = value
 	}
-	status.Evidence = parseEvidence(raw["evidence"])
+	status.Evidence = parseEvidence(envelope["evidence"])
 	return status, nil
 }
 

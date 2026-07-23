@@ -135,3 +135,36 @@ func TestParseHealthRejectsOkFalseWithoutErrorDetails(t *testing.T) {
 		t.Fatalf("expected default error code, got %v", err)
 	}
 }
+
+func TestParseHealthRejectsNonBooleanOk(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"ok":"true","health":{"device_id":"edge-5"}}` + "\n")
+	_, err := ParseHealth(payload)
+	if err == nil {
+		t.Fatal("expected error for non-boolean ok")
+	}
+	if !strings.Contains(err.Error(), "non-boolean ok") {
+		t.Fatalf("expected non-boolean ok error, got %v", err)
+	}
+}
+
+func TestParseHealthRejectsMissingHealth(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"ok":true,"device_id":"edge-6"}` + "\n")
+	_, err := ParseHealth(payload)
+	if err == nil {
+		t.Fatal("expected error when health is missing from canonical envelope")
+	}
+	if !strings.Contains(err.Error(), "health is missing or not an object") {
+		t.Fatalf("expected missing health error, got %v", err)
+	}
+}
+
+func TestParseHealthRejectsNonObjectHealth(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"ok":true,"health":"not-an-object"}` + "\n")
+	_, err := ParseHealth(payload)
+	if err == nil {
+		t.Fatal("expected error when health is not an object")
+	}
+	if !strings.Contains(err.Error(), "health is missing or not an object") {
+		t.Fatalf("expected non-object health error, got %v", err)
+	}
+}

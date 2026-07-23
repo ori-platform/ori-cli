@@ -27,7 +27,7 @@ type Options struct {
 	Bridge          BridgeRunner
 	GetHealth       func(context.Context, string) (rpc.RuntimeHealthStatus, error)
 	UseToken        func(string, token.UseOptions) (token.OfflineUseResult, error)
-	RegisterKeypair func(context.Context, string, string, cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error)
+	RegisterKeypair func(context.Context, string, string, string, cloud.RegisterKeypairRequest) error
 }
 
 type rootState struct {
@@ -37,7 +37,7 @@ type rootState struct {
 	bridge          BridgeRunner
 	getHealth       func(context.Context, string) (rpc.RuntimeHealthStatus, error)
 	useToken        func(string, token.UseOptions) (token.OfflineUseResult, error)
-	registerKeypair func(context.Context, string, string, cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error)
+	registerKeypair func(context.Context, string, string, string, cloud.RegisterKeypairRequest) error
 }
 
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -150,6 +150,6 @@ func notImplemented(message string) error {
 	return errors.New("not yet implemented: " + message)
 }
 
-func defaultRegisterKeypair(ctx context.Context, baseURL, deviceAPIKey string, req cloud.RegisterKeypairRequest) (cloud.RegisterKeypairResponse, error) {
-	return cloud.New(baseURL).RegisterKeypair(ctx, deviceAPIKey, req)
+func defaultRegisterKeypair(ctx context.Context, baseURL, deviceAPIKey, deviceID string, req cloud.RegisterKeypairRequest) error {
+	return cloud.New(baseURL).RegisterKeypair(ctx, deviceAPIKey, deviceID, req)
 }

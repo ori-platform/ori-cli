@@ -209,3 +209,128 @@ func TestLoadPrivateKeyRoundTrip(t *testing.T) {
 		t.Fatal("loaded private key does not match stored public key")
 	}
 }
+
+func TestEnsureKeypairRecoversPartialPrivateCommit(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+
+	oldPub, _, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("first EnsureKeypair failed: %v", err)
+	}
+
+	privPath := filepath.Join(dir, PrivateKeyFile)
+	pubPath := filepath.Join(dir, PublicKeyFile)
+	privBak := filepath.Join(dir, privateKeyBackupFile)
+	pubBak := filepath.Join(dir, publicKeyBackupFile)
+
+	// Simulate an interrupted force overwrite: backup exists, final private was
+	// committed, final public is missing.
+	if err := os.Rename(privPath, privBak); err != nil {
+		t.Fatalf("backup private: %v", err)
+	}
+	if err := os.Rename(pubPath, pubBak); err != nil {
+		t.Fatalf("backup public: %v", err)
+	}
+	if err := os.WriteFile(privPath, []byte("new-private-stub"), 0o600); err != nil {
+		t.Fatalf("write partial private: %v", err)
+	}
+
+	recovered, generated, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("recovery EnsureKeypair failed: %v", err)
+	}
+	if generated {
+		t.Fatal("expected recovery to reuse existing pair, not generate")
+	}
+	if recovered != oldPub {
+		t.Fatalf("recovered public key = %q, want %q", recovered, oldPub)
+	}
+	if _, err := ks.loadValidPair(); err != nil {
+		t.Fatalf("recovered pair is not loadable: %v", err)
+	}
+}
+
+func TestEnsureKeypairRecoversFromBackupsWhenFinalFilesMissing(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+
+	oldPub, _, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("first EnsureKeypair failed: %v", err)
+	}
+
+	privPath := filepath.Join(dir, PrivateKeyFile)
+	pubPath := filepath.Join(dir, PublicKeyFile)
+	privBak := filepath.Join(dir, privateKeyBackupFile)
+	pubBak := filepath.Join(dir, publicKeyBackupFile)
+
+	// Simulate an interrupted write after backups were taken but before any
+	// final file was renamed into place.
+	if err := os.Rename(privPath, privBak); err != nil {
+		t.Fatalf("backup private: %v", err)
+	}
+	if err := os.Rename(pubPath, pubBak); err != nil {
+		t.Fatalf("backup public: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".device.key.tmp.123"), []byte("temp"), 0o600); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+
+	recovered, generated, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("recovery EnsureKeypair failed: %v", err)
+	}
+	if generated {
+		t.Fatal("expected recovery to reuse existing pair, not generate")
+	}
+	if recovered != oldPub {
+		t.Fatalf("recovered public key = %q, want %q", recovered, oldPub)
+	}
+}
+
+func TestEnsureKeypairForceRemovesBackupsOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+
+	if _, _, err := ks.EnsureKeypair(false); err != nil {
+		t.Fatalf("first EnsureKeypair failed: %v", err)
+	}
+
+	if _, _, err := ks.EnsureKeypair(true); err != nil {
+		t.Fatalf("force EnsureKeypair failed: %v", err)
+	}
+
+	if fileExists(filepath.Join(dir, privateKeyBackupFile)) {
+		t.Fatal("private backup should be removed after successful force overwrite")
+	}
+	if fileExists(filepath.Join(dir, publicKeyBackupFile)) {
+		t.Fatal("public backup should be removed after successful force overwrite")
+	}
+}
+
+func TestEnsureKeypairRecoversPartialInitialCreation(t *testing.T) {
+	dir := t.TempDir()
+	ks := KeyStore{Dir: dir}
+
+	// Simulate an interrupted initial write: final private was committed but
+	// final public was not, and no backup exists.
+	privPath := filepath.Join(dir, PrivateKeyFile)
+	if err := os.WriteFile(privPath, []byte("partial-private-stub"), 0o600); err != nil {
+		t.Fatalf("write partial private: %v", err)
+	}
+
+	pubHex, generated, err := ks.EnsureKeypair(false)
+	if err != nil {
+		t.Fatalf("recovery EnsureKeypair failed: %v", err)
+	}
+	if !generated {
+		t.Fatal("expected recovery to generate a fresh pair after partial initial creation")
+	}
+	if len(pubHex) != 64 {
+		t.Fatalf("public key hex length = %d, want 64", len(pubHex))
+	}
+	if _, err := ks.loadValidPair(); err != nil {
+		t.Fatalf("recovered pair is not loadable: %v", err)
+	}
+}
