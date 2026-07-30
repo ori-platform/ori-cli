@@ -10,6 +10,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ori-platform/ori-cli/internal/bridge"
 	"github.com/ori-platform/ori-cli/internal/rpc"
@@ -106,6 +107,9 @@ func TestDoctorJSONDeterministicAndRedacted(t *testing.T) {
 			GetHealth: func(context.Context, string) (rpc.RuntimeHealthStatus, error) {
 				return rpc.RuntimeHealthStatus{}, errors.New("unused")
 			},
+			// Freeze the clock: delta_ms derives from now, so a live clock
+			// makes byte-identical output a race.
+			NowMs: func() int64 { return 1753000006000 },
 		})
 		if code != 0 {
 			t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
@@ -210,6 +214,45 @@ func TestDoctorDegradedStillExitsZero(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "ori doctor: DEGRADED") {
 		t.Fatalf("expected degraded overall:\n%s", stdout.String())
+	}
+}
+
+// hangingBridge blocks until its context deadline, simulating a bridge
+// process that never answers.
+type hangingBridge struct{}
+
+func (h *hangingBridge) Run(ctx context.Context, _ ...string) (bridge.Result, error) {
+	<-ctx.Done()
+	return bridge.Result{}, ctx.Err()
+}
+
+func TestDoctorSocketFallbackSurvivesBridgeTimeout(t *testing.T) {
+	origOverall, origBridgeTimeout := doctorOverallTimeout, doctorBridgeTimeout
+	doctorOverallTimeout = 2 * time.Second
+	doctorBridgeTimeout = 100 * time.Millisecond
+	defer func() {
+		doctorOverallTimeout = origOverall
+		doctorBridgeTimeout = origBridgeTimeout
+	}()
+
+	status := doctorHealthyStatus(t)
+	socketSawLiveContext := false
+	var stdout, stderr bytes.Buffer
+	code := ExecuteWithOptions([]string{"doctor"}, &stdout, &stderr, Options{
+		Bridge: &hangingBridge{},
+		GetHealth: func(ctx context.Context, _ string) (rpc.RuntimeHealthStatus, error) {
+			socketSawLiveContext = ctx.Err() == nil
+			return status, nil
+		},
+	})
+	if code != 0 {
+		t.Fatalf("socket fallback must serve after bridge timeout, exit = %d, stderr = %s", code, stderr.String())
+	}
+	if !socketSawLiveContext {
+		t.Fatal("socket fallback received an already-cancelled context")
+	}
+	if !strings.Contains(stdout.String(), "Device: edge-doc") {
+		t.Fatalf("fallback output:\n%s", stdout.String())
 	}
 }
 

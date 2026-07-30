@@ -35,13 +35,13 @@ report still exits zero; only transport or contract failures exit
 non-zero.`,
 		Args: cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), doctorOverallTimeout)
 			defer cancel()
 			status, err := fetchDoctorHealth(state, ctx, socketPath)
 			if err != nil {
 				return err
 			}
-			summary := doctor.BuildSummary(status, time.Now().UnixMilli())
+			summary := doctor.BuildSummary(status, state.nowMs())
 			if state.json {
 				return output.JSON(state.stdout, summary)
 			}
@@ -54,12 +54,25 @@ non-zero.`,
 	return cmd
 }
 
+// Doctor transport budgets. Each attempt gets its own bounded context
+// derived from the overall command deadline so a bridge that hangs until
+// its own timeout still leaves live time for the direct-socket fallback.
+// Tests may shrink these.
+var (
+	doctorOverallTimeout = 10 * time.Second
+	doctorBridgeTimeout  = 5 * time.Second
+	doctorSocketTimeout  = 3 * time.Second
+)
+
 // fetchDoctorHealth reads runtime health through the runtime bridge first,
 // falling back to the direct health socket when the bridge is unavailable or
-// its payload fails contract parsing.
+// its payload fails contract parsing. Each transport runs under its own
+// timeout within the parent command context.
 func fetchDoctorHealth(state *rootState, ctx context.Context, socketPath string) (rpc.RuntimeHealthStatus, error) {
 	var bridgeErr error
-	raw, err := bridge.HealthSnapshot(ctx, state.bridge, socketPath)
+	bridgeCtx, bridgeCancel := context.WithTimeout(ctx, doctorBridgeTimeout)
+	raw, err := bridge.HealthSnapshot(bridgeCtx, state.bridge, socketPath)
+	bridgeCancel()
 	if err != nil {
 		bridgeErr = err
 	} else if status, parseErr := rpc.ParseHealth(raw); parseErr != nil {
@@ -68,7 +81,9 @@ func fetchDoctorHealth(state *rootState, ctx context.Context, socketPath string)
 		return status, nil
 	}
 
-	status, socketErr := state.getHealth(ctx, socketPath)
+	socketCtx, socketCancel := context.WithTimeout(ctx, doctorSocketTimeout)
+	status, socketErr := state.getHealth(socketCtx, socketPath)
+	socketCancel()
 	if socketErr == nil {
 		return status, nil
 	}

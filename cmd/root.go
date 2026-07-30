@@ -33,6 +33,7 @@ type Options struct {
 	GetHealth    func(context.Context, string) (rpc.RuntimeHealthStatus, error)
 	UseToken     func(string, token.UseOptions) (token.OfflineUseResult, error)
 	FirmwareMQTT FirmwareMQTTRunner
+	NowMs        func() int64
 }
 
 type rootState struct {
@@ -43,6 +44,7 @@ type rootState struct {
 	getHealth    func(context.Context, string) (rpc.RuntimeHealthStatus, error)
 	useToken     func(string, token.UseOptions) (token.OfflineUseResult, error)
 	firmwareMQTT FirmwareMQTTRunner
+	nowMs        func() int64
 }
 
 func Execute(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -59,6 +61,7 @@ func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts 
 		getHealth:    opts.GetHealth,
 		useToken:     opts.UseToken,
 		firmwareMQTT: opts.FirmwareMQTT,
+		nowMs:        opts.NowMs,
 	}
 	if state.bridge == nil {
 		state.bridge = bridge.DefaultRunner()
@@ -71,6 +74,9 @@ func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts 
 	}
 	if state.firmwareMQTT == nil {
 		state.firmwareMQTT = rpc.CallFirmwareMQTT
+	}
+	if state.nowMs == nil {
+		state.nowMs = func() int64 { return time.Now().UnixMilli() }
 	}
 
 	root := newRootCommand(&state)
