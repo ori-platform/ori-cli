@@ -5,6 +5,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -259,5 +260,222 @@ func TestParseHealthRejectsNonObjectHealth(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "health is missing or not an object") {
 		t.Fatalf("expected non-object health error, got %v", err)
+	}
+}
+
+const v2HealthPayload = `{"schema_version":1,"ok":true,"health":{` +
+	`"device_id":"edge-9","uptime_s":12.5,"health_socket_path":"/tmp/ori-health.sock",` +
+	`"capability_posture":{"available":true,"sms_available":false,"whatsapp_available":true,` +
+	`"gateway_reachable":false,"local_slm_loaded":false,"relay_connected":true,"internet_available":true,` +
+	`"checked_at_ms":100,"expires_at_ms":200,"gateway_last_heartbeat_ms":null},` +
+	`"sensors":[` +
+	`{"id":"meter-1","type":"power","protocol":"modbus","poll_interval_ms":1000,"connected":true,"last_seen_ms":5000,"stale":false},` +
+	`{"id":"temp-1","type":"temperature","protocol":"gpio","poll_interval_ms":2000,"connected":false,"last_seen_ms":null,"stale":true}],` +
+	`"last_alert_timestamps":{"by_channel":{"sms":100},"by_trigger":{"x":200}},` +
+	`"alert_outbox":{"backlog_count":2,"oldest_queued_original_ts":400,"oldest_queued_age_ms":600,` +
+	`"retry_interval_minutes":0.5,"max_non_tier_d_attempts":10,"tier_d_critical_warning_threshold":3,"batch_size":50},` +
+	`"device_policy":{"available":true,"enabled":true,"policy_version":3,"tier":"standard",` +
+	`"relay_b_enabled":true,"relay_c_enabled":false,"cloud_llm_enabled":null,` +
+	`"alert_sms_monthly_cap":100,"alert_whatsapp_monthly_cap":50,"valid_until":999,"issued_at":111,"is_expired":false},` +
+	`"remote_command_lockout":{"enforcement_enabled":true,"risk_window_ms":3600000,"stale_after_ms":3600000,` +
+	`"incident_sender_limit":50,"senders":[{"channel":"sms","from_number":"+27000SECRET","risk_level":"critical",` +
+	`"reason":"critical_incidents","locked_out":true,"enforcement_enabled":true,"stale":false,` +
+	`"incident_count":4,"rejection_count":1,"window_ms":3600000,"checked_at_ms":700}]},` +
+	`"gateway_broker_posture":{"available":true,"gateway_enabled":true,"require_credentials":true,` +
+	`"credentials_configured":true,"requires_acl_hardening":false,"deployment_check":"warning",` +
+	`"anonymous_access":"disabled","acl_policy":"per_device_required"},` +
+	`"state_store_encryption":{"available":true,"satisfied":true,"marker_configured":true,` +
+	`"path_prefix_configured":true,"mode":"filesystem_required"},` +
+	`"evidence":{"enabled":true,"available":true,"public_key_hex":"aabb","artifact_version":"0.2.0",` +
+	`"protocol_version":"evidence.v1","action_event_type":"SAFETY_ACTION_EXECUTED","chain_head_hash":"ccdd",` +
+	`"pending_export_count":2,"last_attested_action_id":42,"attestation_gap_count":1,"status_counts":{"signed":40}}}}`
+
+func TestParseHealthReadsV2Payload(t *testing.T) {
+	got, err := ParseHealth([]byte(v2HealthPayload + "\n"))
+	if err != nil {
+		t.Fatalf("ParseHealth: %v", err)
+	}
+	if got.DeviceID != "edge-9" || got.UptimeS != 12.5 || got.HealthSocketPath != "/tmp/ori-health.sock" {
+		t.Fatalf("top-level fields = %+v", got)
+	}
+
+	posture := got.CapabilityPosture
+	if posture == nil || !posture.Available || posture.SMSAvailable || !posture.WhatsAppAvailable ||
+		!posture.RelayConnected || !posture.InternetAvailable {
+		t.Fatalf("capability posture = %+v", posture)
+	}
+	if posture.GatewayLastHeartbeatMs != nil {
+		t.Fatalf("gateway heartbeat = %v, want nil", *posture.GatewayLastHeartbeatMs)
+	}
+
+	if len(got.Sensors) != 2 {
+		t.Fatalf("sensors = %d, want 2", len(got.Sensors))
+	}
+	if got.Sensors[0].LastSeenMs == nil || *got.Sensors[0].LastSeenMs != 5000 {
+		t.Fatalf("meter-1 last_seen = %v", got.Sensors[0].LastSeenMs)
+	}
+	if got.Sensors[1].LastSeenMs != nil || !got.Sensors[1].Stale || got.Sensors[1].Connected {
+		t.Fatalf("temp-1 = %+v", got.Sensors[1])
+	}
+
+	outbox := got.AlertOutbox
+	if outbox == nil || outbox.BacklogCount != 2 || outbox.OldestQueuedAgeMs == nil ||
+		*outbox.OldestQueuedAgeMs != 600 || outbox.RetryIntervalMinutes != 0.5 {
+		t.Fatalf("alert outbox = %+v", outbox)
+	}
+
+	policy := got.DevicePolicy
+	if policy == nil || !policy.Available || !policy.Enabled {
+		t.Fatalf("device policy = %+v", policy)
+	}
+	if policy.RelayCEnabled == nil || *policy.RelayCEnabled {
+		t.Fatalf("relay_c_enabled = %v, want false", policy.RelayCEnabled)
+	}
+	if policy.IsExpired == nil || *policy.IsExpired {
+		t.Fatalf("is_expired = %v, want false", policy.IsExpired)
+	}
+	if policy.AlertSMSMonthlyCap == nil || *policy.AlertSMSMonthlyCap != 100 {
+		t.Fatalf("sms cap = %v", policy.AlertSMSMonthlyCap)
+	}
+
+	lockout := got.RemoteCommandLockout
+	if lockout == nil || !lockout.EnforcementEnabled || len(lockout.Senders) != 1 {
+		t.Fatalf("lockout = %+v", lockout)
+	}
+	sender := lockout.Senders[0]
+	if sender.RiskLevel != "critical" || !sender.LockedOut || sender.IncidentCount != 4 {
+		t.Fatalf("sender = %+v", sender)
+	}
+
+	broker := got.GatewayBrokerPosture
+	if broker == nil || !broker.Available || broker.DeploymentCheck != "warning" ||
+		broker.ACLPolicy != "per_device_required" {
+		t.Fatalf("gateway broker = %+v", broker)
+	}
+
+	encryption := got.StateStoreEncryption
+	if encryption == nil || encryption.Mode != "filesystem_required" || !encryption.Satisfied {
+		t.Fatalf("encryption = %+v", encryption)
+	}
+
+	evidence := got.Evidence
+	if evidence.ArtifactVersion != "0.2.0" || evidence.ProtocolVersion != "evidence.v1" ||
+		evidence.ActionEventType != "SAFETY_ACTION_EXECUTED" {
+		t.Fatalf("evidence = %+v", evidence)
+	}
+	if evidence.ChainHeadHash == nil || *evidence.ChainHeadHash != "ccdd" {
+		t.Fatalf("chain head = %v", evidence.ChainHeadHash)
+	}
+	if evidence.PendingExportCount == nil || *evidence.PendingExportCount != 2 {
+		t.Fatalf("pending exports = %v", evidence.PendingExportCount)
+	}
+	if evidence.LastAttestedActionID == nil || *evidence.LastAttestedActionID != 42 {
+		t.Fatalf("last attested = %v", evidence.LastAttestedActionID)
+	}
+	if evidence.AttestationGapCount != 1 || evidence.StatusCounts["signed"] != 40 {
+		t.Fatalf("evidence counts = %+v", evidence)
+	}
+}
+
+func TestParseHealthRedactsSenderIdentities(t *testing.T) {
+	t.Run("canonical", func(t *testing.T) {
+		got, err := ParseHealth([]byte(v2HealthPayload + "\n"))
+		if err != nil {
+			t.Fatalf("ParseHealth: %v", err)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		for _, leaked := range []string{"+27000SECRET", "critical_incidents", "from_number"} {
+			if strings.Contains(string(raw), leaked) {
+				t.Fatalf("raw passthrough leaks %q: %s", leaked, raw)
+			}
+		}
+		// Aggregate-safe fields survive in the typed model.
+		if got.RemoteCommandLockout.Senders[0].RiskLevel != "critical" {
+			t.Fatal("typed sender aggregate fields must survive redaction")
+		}
+	})
+
+	t.Run("legacy", func(t *testing.T) {
+		payload := []byte(`{"status":"ok","remote_command_lockout":{"enforcement_enabled":false,` +
+			`"senders":[{"channel":"sms","from_number":"+27000SECRET","reason":"critical_incidents"}]}}` + "\n")
+		got, err := ParseHealth(payload)
+		if err != nil {
+			t.Fatalf("ParseHealth: %v", err)
+		}
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		for _, leaked := range []string{"+27000SECRET", "critical_incidents"} {
+			if strings.Contains(string(raw), leaked) {
+				t.Fatalf("legacy raw passthrough leaks %q: %s", leaked, raw)
+			}
+		}
+	})
+}
+
+func TestParseHealthToleratesMissingV2Blocks(t *testing.T) {
+	payload := []byte(`{"schema_version":1,"ok":true,"health":{"device_id":"edge-10",` +
+		`"evidence":{"enabled":false,"available":false,"public_key_hex":""}}}` + "\n")
+	got, err := ParseHealth(payload)
+	if err != nil {
+		t.Fatalf("ParseHealth: %v", err)
+	}
+	if got.CapabilityPosture != nil || got.AlertOutbox != nil || got.DevicePolicy != nil ||
+		got.RemoteCommandLockout != nil || got.GatewayBrokerPosture != nil ||
+		got.StateStoreEncryption != nil || len(got.Sensors) != 0 {
+		t.Fatalf("absent v2 blocks must parse as absent: %+v", got)
+	}
+}
+
+func TestParseHealthRejectsMalformedV2Blocks(t *testing.T) {
+	tests := []struct {
+		name  string
+		block string
+		want  string
+	}{
+		{
+			name:  "sensors not array",
+			block: `"sensors":"nope",`,
+			want:  "sensors field is not an array",
+		},
+		{
+			name:  "capability posture wrong type",
+			block: `"capability_posture":{"available":"yes"},`,
+			want:  "available field is not boolean",
+		},
+		{
+			name: "sender missing identity field",
+			block: `"remote_command_lockout":{"enforcement_enabled":true,"risk_window_ms":1,` +
+				`"stale_after_ms":1,"incident_sender_limit":1,"senders":[{"channel":"sms"}]},`,
+			want: "missing required from_number field",
+		},
+		{
+			name:  "outbox wrong type",
+			block: `"alert_outbox":{"backlog_count":"2"},`,
+			want:  "backlog_count field is not an integer",
+		},
+		{
+			name:  "block not object",
+			block: `"device_policy":"nope",`,
+			want:  "device_policy field is not an object",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"schema_version":1,"ok":true,"health":{` + tt.block +
+				`"evidence":{"enabled":false,"available":false,"public_key_hex":""}}}` + "\n")
+			_, err := ParseHealth(payload)
+			if err == nil {
+				t.Fatal("expected malformed v2 block to fail closed")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected %q error, got %v", tt.want, err)
+			}
+		})
 	}
 }
