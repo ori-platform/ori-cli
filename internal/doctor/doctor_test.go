@@ -296,7 +296,7 @@ func TestEvidenceSummary(t *testing.T) {
 		summary := Evidence(rpc.RuntimeHealthStatus{
 			Evidence: rpc.EvidenceStatus{
 				Enabled: true, Available: true, PublicKeyHex: "ab12",
-				ArtifactVersion: "0.2.0", ProtocolVersion: "evidence.v1",
+				ProtocolVersion: "evidence.v1",
 				ActionEventType: "SAFETY_ACTION_EXECUTED",
 				ChainHeadHash:   stringPtr("9f"), PendingExportCount: int64Ptr(3),
 				LastAttestedActionID: int64Ptr(42),

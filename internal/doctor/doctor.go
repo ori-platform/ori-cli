@@ -73,7 +73,6 @@ type EvidenceSummary struct {
 	Enabled              bool     `json:"enabled"`
 	Available            bool     `json:"available"`
 	PublicKeyHex         string   `json:"public_key_hex"`
-	ArtifactVersion      string   `json:"artifact_version"`
 	ProtocolVersion      string   `json:"protocol_version"`
 	ActionEventType      string   `json:"action_event_type"`
 	ChainHeadHash        *string  `json:"chain_head_hash"`
@@ -289,7 +288,6 @@ func Evidence(status rpc.RuntimeHealthStatus) EvidenceSummary {
 		Enabled:              evidence.Enabled,
 		Available:            evidence.Available,
 		PublicKeyHex:         evidence.PublicKeyHex,
-		ArtifactVersion:      evidence.ArtifactVersion,
 		ProtocolVersion:      evidence.ProtocolVersion,
 		ActionEventType:      evidence.ActionEventType,
 		ChainHeadHash:        evidence.ChainHeadHash,
