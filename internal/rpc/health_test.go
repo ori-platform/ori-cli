@@ -358,8 +358,11 @@ func TestParseHealthReadsV2Payload(t *testing.T) {
 		t.Fatalf("encryption = %+v", encryption)
 	}
 
+	// The payload above still carries artifact_version, as a v1 runtime sends
+	// it. Parsing must accept it and ignore it, so the assertion is on the
+	// fields that survive rather than on the one that was dropped.
 	evidence := got.Evidence
-	if evidence.ArtifactVersion != "0.2.0" || evidence.ProtocolVersion != "evidence.v1" ||
+	if evidence.ProtocolVersion != "evidence.v1" ||
 		evidence.ActionEventType != "SAFETY_ACTION_EXECUTED" {
 		t.Fatalf("evidence = %+v", evidence)
 	}
@@ -412,6 +415,89 @@ func TestParseHealthRedactsSenderIdentities(t *testing.T) {
 		for _, leaked := range []string{"+27000SECRET", "critical_incidents"} {
 			if strings.Contains(string(raw), leaked) {
 				t.Fatalf("legacy raw passthrough leaks %q: %s", leaked, raw)
+			}
+		}
+	})
+}
+
+func TestParseHealthRedactsEvidenceArtifactIdentity(t *testing.T) {
+	// Removing the typed field does not remove the key from Raw, and
+	// MarshalJSON returns Raw untouched whenever it is present. Every surface
+	// that prints the runtime payload directly goes through this path.
+	assertRedacted := func(t *testing.T, got RuntimeHealthStatus) {
+		t.Helper()
+		raw, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		for _, leaked := range []string{"artifact_version", "0.2.0"} {
+			if strings.Contains(string(raw), leaked) {
+				t.Fatalf("raw passthrough leaks %q: %s", leaked, raw)
+			}
+		}
+		// Redaction must be surgical: the public posture an operator needs in
+		// order to notice degradation stays in the same object.
+		for _, want := range []string{"evidence.v1", "public_key_hex"} {
+			if !strings.Contains(string(raw), want) {
+				t.Fatalf("raw passthrough lost evidence posture %q: %s", want, raw)
+			}
+		}
+	}
+
+	t.Run("canonical", func(t *testing.T) {
+		if !strings.Contains(v2HealthPayload, `"artifact_version":"0.2.0"`) {
+			t.Fatal("fixture must carry artifact_version, or this test proves nothing")
+		}
+		got, err := ParseHealth([]byte(v2HealthPayload + "\n"))
+		if err != nil {
+			t.Fatalf("ParseHealth: %v", err)
+		}
+		assertRedacted(t, got)
+		if got.Evidence.ProtocolVersion != "evidence.v1" {
+			t.Fatal("typed evidence posture must survive redaction")
+		}
+	})
+
+	t.Run("legacy", func(t *testing.T) {
+		payload := []byte(`{"status":"ok","evidence":{"enabled":true,"available":true,` +
+			`"public_key_hex":"aabb","artifact_version":"0.2.0","protocol_version":"evidence.v1",` +
+			`"action_event_type":"SAFETY_ACTION_EXECUTED"}}` + "\n")
+		got, err := ParseHealth(payload)
+		if err != nil {
+			t.Fatalf("ParseHealth: %v", err)
+		}
+		assertRedacted(t, got)
+	})
+
+	t.Run("evidence absent is not a panic", func(t *testing.T) {
+		if _, err := ParseHealth([]byte(`{"status":"ok"}` + "\n")); err != nil {
+			t.Fatalf("ParseHealth: %v", err)
+		}
+	})
+
+	// The typed parse for this key was removed with the field, so it is no
+	// longer type-checked. A malformed value is dropped rather than refused,
+	// which is correct for a legacy key nothing reads — a runtime sending it
+	// must keep working — but it is a deliberate narrowing of what this
+	// parser rejects, so it is pinned here rather than left implied.
+	t.Run("malformed artifact_version is ignored, not rejected", func(t *testing.T) {
+		for _, value := range []string{`123`, `{"nested":true}`, `null`, `["a"]`} {
+			payload := []byte(`{"status":"ok","evidence":{"enabled":true,"available":true,` +
+				`"public_key_hex":"aabb","artifact_version":` + value +
+				`,"protocol_version":"evidence.v1"}}` + "\n")
+			got, err := ParseHealth(payload)
+			if err != nil {
+				t.Fatalf("artifact_version %s must be ignored, not rejected: %v", value, err)
+			}
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if strings.Contains(string(raw), "artifact_version") {
+				t.Fatalf("artifact_version %s survived redaction: %s", value, raw)
+			}
+			if got.Evidence.ProtocolVersion != "evidence.v1" {
+				t.Fatalf("artifact_version %s disturbed the surviving posture", value)
 			}
 		}
 	})

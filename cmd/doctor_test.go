@@ -142,6 +142,59 @@ func TestDoctorJSONDeterministicAndRedacted(t *testing.T) {
 	}
 }
 
+// The health payload these tests drive still carries artifact_version, as a
+// v1 runtime sends it. Both operator surfaces must drop it on the floor.
+//
+// The render was already guarded on a non-empty value, so adopting
+// runtime-health/v2 in the runtime would have made the line disappear on its
+// own. That is exactly why the field is deleted rather than left to lapse: a
+// disclosure that stops by accident can restart the same way, and a future
+// runtime reporting the field again would silently restore the render. With
+// no field to render, the property holds whatever the runtime sends.
+func TestDoctorOmitsArtifactIdentityFromALegacyRuntime(t *testing.T) {
+	if !strings.Contains(doctorHealthPayload, `"artifact_version":"0.2.0"`) {
+		t.Fatal("fixture must carry artifact_version, or this test proves nothing")
+	}
+
+	run := func(args ...string) string {
+		fakeBridge := &doctorFakeBridge{stdout: doctorBridgeEnvelope(doctorHealthPayload)}
+		var stdout, stderr bytes.Buffer
+		code := ExecuteWithOptions(append([]string{"doctor"}, args...), &stdout, &stderr, Options{
+			Bridge: fakeBridge,
+			GetHealth: func(context.Context, string) (rpc.RuntimeHealthStatus, error) {
+				return rpc.RuntimeHealthStatus{}, errors.New("unused")
+			},
+			NowMs: func() int64 { return 1753000006000 },
+		})
+		if code != 0 {
+			t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+		}
+		return stdout.String()
+	}
+
+	for _, surface := range []struct {
+		name string
+		out  string
+	}{
+		{"text", run()},
+		{"json", run("--json")},
+	} {
+		for _, leaked := range []string{"artifact:", "artifact_version", "0.2.0"} {
+			if strings.Contains(surface.out, leaked) {
+				t.Fatalf("doctor %s renders artifact identity %q:\n%s", surface.name, leaked, surface.out)
+			}
+		}
+		// Removal must not have taken the public posture with it: an operator
+		// still has to be able to see that this device can sign, and against
+		// which contract, or degradation stops being noticeable.
+		for _, want := range []string{"evidence.v1", "SAFETY_ACTION_EXECUTED"} {
+			if !strings.Contains(surface.out, want) {
+				t.Fatalf("doctor %s lost evidence posture %q:\n%s", surface.name, want, surface.out)
+			}
+		}
+	}
+}
+
 func TestDoctorFallsBackToSocket(t *testing.T) {
 	fakeBridge := &doctorFakeBridge{err: errors.New("python3 not found")}
 	status := doctorHealthyStatus(t)

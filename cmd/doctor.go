@@ -182,9 +182,6 @@ func renderDoctorEvidence(w io.Writer, evidence doctor.EvidenceSummary) {
 	if evidence.ProtocolVersion != "" {
 		fmt.Fprintf(w, "  protocol: %s\n", evidence.ProtocolVersion)
 	}
-	if evidence.ArtifactVersion != "" {
-		fmt.Fprintf(w, "  artifact: %s\n", evidence.ArtifactVersion)
-	}
 	if evidence.ActionEventType != "" {
 		fmt.Fprintf(w, "  action event: %s\n", evidence.ActionEventType)
 	}

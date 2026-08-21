@@ -20,11 +20,17 @@ const DefaultHealthSocket = "/run/ori/health.sock"
 // fields are optional evidence posture metadata reported by v2 runtimes.
 // ProtocolVersion is the opaque public alias reported by the runtime; the
 // CLI must never validate or name the private artifact implementation.
+//
+// artifact_version is deliberately not a field here. ori-specs
+// runtime-health/v2 removes it from the contract, and it is the private
+// component's own identity metadata rather than evidence posture: Available
+// and ProtocolVersion already answer whether the device can sign and against
+// which public contract. A v1 runtime still sends it and is still accepted —
+// the key is ignored, not rejected.
 type EvidenceStatus struct {
 	Enabled              bool             `json:"enabled"`
 	Available            bool             `json:"available"`
 	PublicKeyHex         string           `json:"public_key_hex"`
-	ArtifactVersion      string           `json:"artifact_version,omitempty"`
 	ProtocolVersion      string           `json:"protocol_version,omitempty"`
 	ActionEventType      string           `json:"action_event_type,omitempty"`
 	ChainHeadHash        *string          `json:"chain_head_hash,omitempty"`
@@ -263,8 +269,10 @@ func ParseHealth(payload []byte) (RuntimeHealthStatus, error) {
 			return RuntimeHealthStatus{}, err
 		}
 		// Redact only after the typed parse: sender identities stay
-		// available to aggregate counts but never to Raw passthrough output.
+		// available to aggregate counts but never to Raw passthrough output,
+		// and the same holds for the private artifact version.
 		redactSenderIdentities(health)
+		redactEvidenceArtifactIdentity(health)
 		return status, nil
 	}
 
@@ -282,6 +290,7 @@ func ParseHealth(payload []byte) (RuntimeHealthStatus, error) {
 		return RuntimeHealthStatus{}, err
 	}
 	status.Evidence = evidence
+	redactEvidenceArtifactIdentity(envelope)
 	return status, nil
 }
 
@@ -308,6 +317,32 @@ func redactSenderIdentities(health map[string]any) {
 		delete(sender, "channel")
 		delete(sender, "reason")
 	}
+}
+
+// redactEvidenceArtifactIdentity removes the private evidence component's
+// version from a parsed health object in place.
+//
+// Dropping the typed field was not enough on its own. `Raw` holds the whole
+// runtime envelope and `MarshalJSON` returns it untouched, so every surface
+// that prints the runtime payload directly — `ori doctor runtime-health
+// --json` and `ori --json doctor runtime-health` — kept emitting the key that
+// the typed struct no longer had. A field removed from the type is not a
+// field removed from the passthrough.
+//
+// Redaction occurs after the rest of the health payload is validated, so a
+// payload that is malformed elsewhere is still rejected on its own terms
+// rather than silently sanitised into a valid one. `artifact_version` itself
+// is intentionally ignored regardless of value type: its typed parse was
+// removed with the field, so an integer or an object in that key is dropped
+// here rather than refused. That is the right behaviour for a legacy key
+// nothing reads — a runtime sending it must keep working — but it is a
+// deliberate narrowing of what this parser rejects, not an oversight.
+func redactEvidenceArtifactIdentity(health map[string]any) {
+	evidence, ok := health["evidence"].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(evidence, "artifact_version")
 }
 
 func parseEvidence(value any, requireFields bool) (EvidenceStatus, error) {
@@ -353,9 +388,6 @@ func parseEvidence(value any, requireFields bool) (EvidenceStatus, error) {
 	// Optional v2 evidence posture fields. Present fields with wrong types
 	// fail closed like the required fields above.
 	var err error
-	if es.ArtifactVersion, err = optionalStringField(m, "artifact_version", "evidence"); err != nil {
-		return EvidenceStatus{}, err
-	}
 	if es.ProtocolVersion, err = optionalStringField(m, "protocol_version", "evidence"); err != nil {
 		return EvidenceStatus{}, err
 	}

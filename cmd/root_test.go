@@ -194,6 +194,46 @@ func TestRuntimeHealthJSONUsesParsedHealthStatus(t *testing.T) {
 	}
 }
 
+// The raw runtime-health surfaces print the runtime payload straight through
+// rather than the doctor summary, so they bypass every projection the summary
+// applies. Dropping the typed field left both of them unchanged.
+func TestRuntimeHealthJSONOmitsArtifactIdentity(t *testing.T) {
+	// Parsed from a real payload rather than hand-built, so the redaction is
+	// exercised on the path the command actually takes.
+	const payload = `{"schema_version":1,"ok":true,"health":{"status":"ok","device_id":"edge-1",` +
+		`"evidence":{"enabled":true,"available":true,"public_key_hex":"aabb",` +
+		`"artifact_version":"0.2.0","protocol_version":"evidence.v1",` +
+		`"action_event_type":"SAFETY_ACTION_EXECUTED"}}}`
+
+	getHealth := func(context.Context, string) (rpc.RuntimeHealthStatus, error) {
+		return rpc.ParseHealth([]byte(payload + "\n"))
+	}
+
+	for _, form := range [][]string{
+		{"doctor", "runtime-health", "--output", "json"},
+		{"--json", "doctor", "runtime-health"},
+		{"doctor", "runtime-health", "--json"},
+	} {
+		name := strings.Join(form, " ")
+		code, stdout, stderr := runWithOptions(form, Options{GetHealth: getHealth})
+		if code != 0 {
+			t.Fatalf("%s: code=%d stderr=%q", name, code, stderr)
+		}
+		for _, leaked := range []string{"artifact_version", "0.2.0"} {
+			if strings.Contains(stdout, leaked) {
+				t.Fatalf("%s leaks artifact identity %q:\n%s", name, leaked, stdout)
+			}
+		}
+		// The command must still be reporting evidence at all, or the absence
+		// above would be satisfied by printing nothing.
+		for _, want := range []string{"evidence.v1", "edge-1"} {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("%s lost %q:\n%s", name, want, stdout)
+			}
+		}
+	}
+}
+
 func TestTokenUseIsOfflineCommand(t *testing.T) {
 	called := false
 	useToken := func(raw string, opts token.UseOptions) (token.OfflineUseResult, error) {
