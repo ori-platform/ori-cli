@@ -1,0 +1,9 @@
+{
+  "source_repository": "ori-platform/ori-specs",
+  "source_path": "commissioned-safety-binding",
+  "source_commit": "24209d894538299e3d78305009f535bb2ee8d7a3",
+  "note": "Vendored copy of the normative corpus. The producer must construct these documents from typed values and emit these exact bytes, so it is a conformance fixture rather than a sample. Digests detect a local edit; the source commit is the provenance trail.",
+  "files": {
+    "binding-vectors-v1.json": "60601477e1bbc7003dc0667c9b591762cf4ec1bcb0ee75b1b97f0ff69ea60355"
+  }
+}
