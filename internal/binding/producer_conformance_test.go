@@ -68,16 +68,17 @@ func loadCorpus(t *testing.T) corpusFileShape {
 // document. It exists only in the test: the producer's own input is typed Go
 // values, and this is how a published document becomes some.
 type wire struct {
-	V          int     `json:"v"`
-	BindingSeq int64   `json:"binding_seq"`
-	DeviceID   string  `json:"device_id"`
-	IssuedAtMs int64   `json:"issued_at_ms"`
-	SignerID   string  `json:"signer_id"`
-	SigningKey string  `json:"signing_key"`
-	Supersedes *string `json:"supersedes"`
-	Actor      string  `json:"actor"`
-	Reason     string  `json:"reason"`
-	Zones      []struct {
+	V                   int     `json:"v"`
+	BindingSeq          int64   `json:"binding_seq"`
+	DeviceID            string  `json:"device_id"`
+	IssuedAtMs          int64   `json:"issued_at_ms"`
+	SignerID            string  `json:"signer_id"`
+	SigningKey          string  `json:"signing_key"`
+	InventoryGeneration int64   `json:"inventory_generation"`
+	Supersedes          *string `json:"supersedes"`
+	Actor               string  `json:"actor"`
+	Reason              string  `json:"reason"`
+	Zones               []struct {
 		ZoneID        string `json:"zone_id"`
 		RatedCapacity struct {
 			Parameter  string  `json:"parameter"`
@@ -136,7 +137,8 @@ func typedFrom(t *testing.T, raw json.RawMessage) binding.Binding {
 	doc := binding.Binding{
 		V: w.V, BindingSeq: w.BindingSeq, DeviceID: w.DeviceID,
 		IssuedAtMs: w.IssuedAtMs, SignerID: w.SignerID, SigningKey: w.SigningKey,
-		Supersedes: w.Supersedes, Actor: w.Actor, Reason: w.Reason,
+		InventoryGeneration: w.InventoryGeneration,
+		Supersedes:          w.Supersedes, Actor: w.Actor, Reason: w.Reason,
 	}
 	for _, z := range w.Zones {
 		zone := binding.Zone{
