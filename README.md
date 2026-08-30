@@ -101,6 +101,13 @@ go test ./...
 go build ./...
 ```
 
+The commissioned-safety-binding corpus under `internal/binding/testdata` is
+vendored from `ori-specs`; the producer must emit its exact bytes and the
+verifier must reach each of its declared verdicts. Check it against the
+contract with `bash scripts/refresh-binding-vectors.sh` (report only) and
+re-vendor with `ORI_VECTORS_APPLY=1`; a vector change is a contract change,
+not a refresh.
+
 Preview the first-run welcome locally:
 
 ```bash

@@ -64,6 +64,9 @@ type Binding struct {
 	IssuedAtMs int64
 	SignerID   string
 	SigningKey string
+	// InventoryGeneration names the device/site inventory generation this
+	// binding was commissioned against; at least 1.
+	InventoryGeneration int64
 	// Supersedes is the canonical hash of the binding this replaces, or nil
 	// for the first. A pointer rather than "" because null and absent are
 	// different documents and the contract distinguishes them.
@@ -174,6 +177,13 @@ func (b Binding) canonicalValue() (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("v: %w", err)
 	}
+	if b.InventoryGeneration < 1 {
+		return nil, fmt.Errorf("inventory_generation: a binding is commissioned against an inventory, so there has to be one for it to name")
+	}
+	generation, err := d011.Int(b.InventoryGeneration)
+	if err != nil {
+		return nil, fmt.Errorf("inventory_generation: %w", err)
+	}
 	zones := make([]any, 0, len(b.Zones))
 	for i, z := range b.Zones {
 		zv, err := z.canonicalValue()
@@ -187,16 +197,17 @@ func (b Binding) canonicalValue() (map[string]any, error) {
 		supersedes = *b.Supersedes
 	}
 	return map[string]any{
-		"v":            v,
-		"binding_seq":  seq,
-		"device_id":    b.DeviceID,
-		"issued_at_ms": issued,
-		"signer_id":    b.SignerID,
-		"signing_key":  b.SigningKey,
-		"supersedes":   supersedes,
-		"actor":        b.Actor,
-		"reason":       b.Reason,
-		"zones":        zones,
+		"v":                    v,
+		"binding_seq":          seq,
+		"device_id":            b.DeviceID,
+		"issued_at_ms":         issued,
+		"signer_id":            b.SignerID,
+		"signing_key":          b.SigningKey,
+		"inventory_generation": generation,
+		"supersedes":           supersedes,
+		"actor":                b.Actor,
+		"reason":               b.Reason,
+		"zones":                zones,
 	}, nil
 }
 
@@ -354,12 +365,42 @@ func (b Binding) Preimage() ([]byte, error) {
 	return canonicaljson.Marshal(v)
 }
 
+// Check runs the contract's document-only stages over the bytes this producer
+// would sign: the closed grammar, the mapping's self-consistency, the proof
+// against the mapping it claims to establish, the capacity bounds, and
+// disambiguation. A refusal is a *Refusal naming the stage and reason a
+// consumer would report.
+//
+// A signature proves authorship, not correctness. A transposed proof, a
+// capacity above the sensor's full scale, or a mapping that contradicts itself
+// is refused here, where a human can still see the wiring, rather than by a
+// runtime that would report it as a verdict on a device.
+func (b Binding) Check() error {
+	preimage, err := b.Preimage()
+	if err != nil {
+		return err
+	}
+	value, r := decodeWire(preimage)
+	if r != nil {
+		return r
+	}
+	body, ok := value.(map[string]any)
+	if !ok {
+		return malformed()
+	}
+	if _, r := checkDocument(body, nil); r != nil {
+		return r
+	}
+	return nil
+}
+
 // Sign returns the wire envelope for this binding.
 //
 // The key is checked against the SigningKey the document names. A binding whose
 // named key is not the one that signed it is refused here rather than by every
 // consumer that later fails to verify it, and the mismatch is exactly the case
-// the contract's authority stage exists to catch.
+// the contract's authority stage exists to catch. The document is then checked
+// as a consumer would check it, so nothing is signed that would be refused.
 func (b Binding) Sign(key ed25519.PrivateKey) (map[string]any, error) {
 	pub, ok := key.Public().(ed25519.PublicKey)
 	if !ok {
@@ -369,6 +410,9 @@ func (b Binding) Sign(key ed25519.PrivateKey) (map[string]any, error) {
 	if b.SigningKey != named {
 		return nil, fmt.Errorf(
 			"binding names signing_key %q but was signed by %q", b.SigningKey, named)
+	}
+	if err := b.Check(); err != nil {
+		return nil, err
 	}
 	preimage, err := b.Preimage()
 	if err != nil {
