@@ -1,0 +1,80 @@
+# Pre-commit hooks for ori-cli
+#
+# Install once: pre-commit install
+# Run manually: pre-commit run --all-files
+#
+# Modelled on ori-gateway's, because the two Go repositories should fail for
+# the same reasons in the same order. The differences are ori-cli's own: its
+# licence checker is a shell script that takes paths, and the whitespace hooks
+# are not narrowed away from Markdown, because `scripts/check_hygiene.sh`
+# checks every tracked file and a hook that skipped what CI enforces would let
+# a commit through only to fail later.
+
+minimum_pre_commit_version: "3.7.0"
+default_install_hook_types: [pre-commit, pre-push, commit-msg]
+
+repos:
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        language: system
+        entry: gofmt
+        args: [-w]
+        files: \.go$
+
+      - id: go-vet
+        name: go vet
+        language: system
+        entry: go vet ./...
+        pass_filenames: false
+        files: \.go$
+
+      - id: license-header
+        name: Apache-2.0 license header
+        language: system
+        entry: bash scripts/check_license_headers.sh
+        files: \.go$
+
+      - id: supply-chain-guard
+        name: Supply-chain guard
+        # AGENTS.md requires this before a workflow or pre-commit change is
+        # merged, and a rule that depends on remembering is one nobody runs.
+        # It is what keeps a remote hook's rev pinned to a full commit SHA.
+        language: system
+        entry: bash scripts/check_workflows.sh
+        pass_filenames: false
+        files: ^(\.github/workflows/|\.pre-commit-config\.yaml$|scripts/check_workflows\.sh$)
+
+      - id: conventional-commit
+        name: Conventional commit format
+        language: python
+        stages: [commit-msg]
+        entry: python
+        args:
+          - -c
+          - |-
+            import re
+            import sys
+
+            msg = open(sys.argv[1]).read().split("\n")[0]
+            pattern = (
+                r"^(feat|fix|docs|test|refactor|perf|build|ci|chore|revert|security)"
+                r"(\([a-z0-9/-]+\))?: .{1,100}$"
+            )
+            if not re.match(pattern, msg):
+                print("Commit message does not follow Conventional Commits format.")
+                print(f"Got: {msg!r}")
+                print("Expected: type(scope): description")
+                sys.exit(1)
+        pass_filenames: true
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b # v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: no-commit-to-branch
+        args: [--branch, main]
