@@ -326,11 +326,17 @@ func flag(v any) (bool, bool) {
 	return b, ok
 }
 
-// number admits a JSON number inside the D-011 agreement zone, spelled
-// canonically. A boolean is not a number.
+// number admits a `number` field: inside the D-011 agreement zone, spelled
+// canonically, and spelled with a fractional part. A boolean is not a number.
+//
+// The fractional part is the field-type half of the spelling rule. Admit alone
+// accepts `10` as a canonical integer, and every field reaching here is typed
+// `number` by the contract, so `10` is a second signing input for a value the
+// schema says is written `10.0`. JSON cannot tell the two apart; only the
+// schema knows which was meant.
 func number(v any) (float64, bool) {
 	n, ok := v.(json.Number)
-	if !ok || d011.Admit(n) != nil {
+	if !ok || d011.Admit(n) != nil || !strings.Contains(n.String(), ".") {
 		return 0, false
 	}
 	f, err := strconv.ParseFloat(n.String(), 64)
