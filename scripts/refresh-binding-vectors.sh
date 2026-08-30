@@ -123,6 +123,24 @@ for entry in "${SETS[@]}"; do
     reachable=1
   fi
 
+  # Reachability alone cannot tell a live pin from a stale one. If the bytes
+  # here were updated out of band -- copied by hand while a contract change was
+  # still in review, say -- they match main while the pin still names a commit
+  # that carried different bytes. That is false provenance reported as success,
+  # and it survives every later run because contents keep matching. So the pin
+  # is checked against what it actually names.
+  if [ "${drift}" -eq 0 ] && [ "${reachable}" -eq 1 ]; then
+    for file in "${DEST}"/*.json; do
+      name="$(basename "${file}")"
+      [ "${name}" = "MANIFEST.json" ] && continue
+      if ! git -C "${SPECS}" show "${PINNED}:${entry%%:*}/${name}" 2>/dev/null \
+          | cmp -s - "${file}"; then
+        echo "STALE PIN ${label}/${name}: the bytes here are not the bytes at ${PINNED}"
+        drift=1
+      fi
+    done
+  fi
+
   if [ "${drift}" -eq 0 ] && [ "${reachable}" -eq 1 ]; then
     if [ "${PINNED}" = "${COMMIT}" ]; then
       echo "${label}: vectors match ori-specs at ${COMMIT}"

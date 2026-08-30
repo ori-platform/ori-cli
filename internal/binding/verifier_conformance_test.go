@@ -845,3 +845,60 @@ func resignedAsCorpus(t *testing.T, c fullCorpus, env []byte) []byte {
 	sig := base64.StdEncoding.EncodeToString(ed25519.Sign(key, preimage))
 	return envelopeBytes("binding", shape.Binding, sig)
 }
+
+// ── raw reject cases ────────────────────────────────────────────────────
+//
+// Wire bytes rather than decoded objects, for the rules decoding destroys: a
+// number's spelling, a repeated key, and an unpaired surrogate. Each is the
+// pristine signed envelope with one byte-level alteration, so the signature
+// still covers the document a re-canonicalising verifier would reconstruct —
+// which is why such a verifier accepts every one of them.
+//
+// That a raw case is genuinely raw — that decoding it really does lose
+// something an ordinary case could have carried — is a property of the corpus,
+// checked where the corpus lives and again in the runtime. It is deliberately
+// not re-asserted here: canonicaljson.MarshalWire preserves the number
+// spelling it receives, by design, so the obvious Go spelling of that check
+// would compare a document against itself and pass for the wrong reason.
+
+type rawCase struct {
+	Name            string          `json:"name"`
+	EnvelopeHex     string          `json:"envelope_hex"`
+	VerifierContext json.RawMessage `json:"verifier_context"`
+	Reason          string          `json:"reason"`
+	Stage           string          `json:"stage"`
+}
+
+func loadRawCases(t testing.TB) []rawCase {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(corpusDir, corpusFile))
+	if err != nil {
+		t.Fatalf("read corpus: %v", err)
+	}
+	var c struct {
+		RawRejectCases []rawCase `json:"raw_reject_cases"`
+	}
+	if err := json.Unmarshal(raw, &c); err != nil {
+		t.Fatalf("parse corpus: %v", err)
+	}
+	if len(c.RawRejectCases) == 0 {
+		t.Fatal("corpus carries no raw reject cases")
+	}
+	return c.RawRejectCases
+}
+
+func TestRawRejectCasesAreRefusedFromBytes(t *testing.T) {
+	for _, rc := range loadRawCases(t) {
+		t.Run(rc.Name, func(t *testing.T) {
+			env, err := hex.DecodeString(rc.EnvelopeHex)
+			if err != nil {
+				t.Fatalf("envelope_hex: %v", err)
+			}
+			r := verdict(t, rc.Name, env, bindingContext(t, rc.VerifierContext))
+			if r.Stage != rc.Stage || r.Reason != rc.Reason {
+				t.Fatalf("refused at %s (%s); corpus declares %s (%s)",
+					r.Stage, r.Reason, rc.Stage, rc.Reason)
+			}
+		})
+	}
+}
