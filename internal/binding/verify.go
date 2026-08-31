@@ -129,7 +129,22 @@ type ZoneState struct {
 	Mapping        Mapping
 	CalibrationRef string
 	ProofAtMs      int64
+	// ControlProofAtMs is nil when the retained document carried no control
+	// leg, in which case a revision's control leg is fresh by construction:
+	// there is nothing it could be inheriting. A caller reconstructing this
+	// from a stored row MUST carry the field through: dropping it reads as
+	// "no leg was ever proven" and lets a revision reuse a stale control
+	// proof.
+	ControlProofAtMs *int64
 }
+
+// The control leg's own method vocabulary. `commanded_and_observed` establishes
+// that the control input this binding names, at its declared active_high, is
+// what moves that coil; `undemonstrated` records that nothing was shown.
+const (
+	ControlCommanded = "commanded_and_observed"
+	ControlUnproven  = "undemonstrated"
+)
 
 // Context is everything a binding verdict depends on that is not in the
 // document. A nil anchor is an absent anchor.
@@ -174,7 +189,21 @@ type AcceptedZone struct {
 	CalibrationRef     string
 	ProofMethod        string
 	ProofPerformedAtMs int64
-	RatedCapacity      float64
+	// ControlProofMethod is "" when the leg is absent. Absence denies; a
+	// document written before the leg existed makes no claim about it.
+	ControlProofMethod        string
+	ControlProofPerformedAtMs *int64
+	RatedCapacity             float64
+}
+
+// InForceEligible reports whether this zone carries both proof legs. Only a
+// local_gpio zone can: the commanded method names an operation that has no
+// design for a firmware channel.
+func (z AcceptedZone) InForceEligible() bool {
+	circuitProven := z.ProofMethod == MethodActuate || z.ProofMethod == MethodPreEnergy
+	return z.Kind == KindLocalGPIO &&
+		circuitProven &&
+		z.ControlProofMethod == ControlCommanded
 }
 
 // Accepted is a binding that passed every stage, with what a consumer retains.
@@ -189,6 +218,17 @@ type Accepted struct {
 	Zones               []AcceptedZone
 	CanonicalBytes      []byte
 	Signature           string
+}
+
+// InForceEligible reports whether every zone carries both legs. One zone short
+// leaves the whole document provisional.
+func (a Accepted) InForceEligible() bool {
+	for _, z := range a.Zones {
+		if !z.InForceEligible() {
+			return false
+		}
+	}
+	return len(a.Zones) > 0
 }
 
 // ── grammar ─────────────────────────────────────────────────────────────
@@ -206,9 +246,13 @@ var (
 	firmwareKeys    = []string{"firmware_device_id", "channel"}
 	provenProofKeys = []string{"method", "performed_at_ms", "observations"}
 	unprovenKeys    = []string{"method", "performed_at_ms", "reason", "observations"}
+	controlProven   = []string{"method", "performed_at_ms", "observations"}
+	controlUnproven = []string{"method", "performed_at_ms", "reason", "observations"}
 	obsRequired     = []string{"commanded", "coil_state", "load_present_before", "load_present_after", "terminal_state_observed"}
 	obsOptional     = []string{"gpio_level", "sensor_before", "sensor_after", "instrument"}
 	profileKeys     = []string{"v", "binding_hash", "binding_seq", "device_id", "firmware_device_id", "channel", "commissioned_mapping", "signing_key"}
+
+	controlMethods = []string{ControlCommanded, ControlUnproven}
 
 	coilStates    = []string{CoilEnergised, CoilDeEnergised}
 	circuitStates = []string{CircuitOpen, CircuitClosed}
@@ -456,6 +500,11 @@ type parsedZone struct {
 	method         string
 	performedAtMs  int64
 	observations   []parsedObservation
+	// The control leg. controlMethod is "" when the object is absent, which
+	// the contract reads as unproven: absence denies, it never grants.
+	controlMethod        string
+	controlPerformedAtMs int64
+	controlObservations  []parsedObservation
 }
 
 type parsedBinding struct {
@@ -582,9 +631,24 @@ func parseZone(v any) (parsedZone, bool) {
 	if z.method == MethodUnproven {
 		keys = unprovenKeys
 	}
-	proof, ok := closed(proofObj, keys)
+	// control_path is optional, so the circuit leg's closed grammar is applied
+	// to the object without it. Key presence decides, not value: an explicit
+	// null is a malformed leg rather than an absent one.
+	leg, hasLeg := proofObj["control_path"]
+	body := make(map[string]any, len(proofObj))
+	for k, v := range proofObj {
+		if k != "control_path" {
+			body[k] = v
+		}
+	}
+	proof, ok := closed(body, keys)
 	if !ok {
 		return z, false
+	}
+	if hasLeg {
+		if !parseControlPath(&z, leg) {
+			return z, false
+		}
 	}
 	if z.performedAtMs, ok = whole(proof["performed_at_ms"]); !ok {
 		return z, false
@@ -610,6 +674,60 @@ func parseZone(v any) (parsedZone, bool) {
 		z.observations = append(z.observations, o)
 	}
 	return z, true
+}
+
+// parseControlPath reads proof.control_path, closed over its own method
+// vocabulary. A commanded proof is admissible only for a local_gpio actuator:
+// the firmware delivery lifecycle requires a device to hold its mapping before
+// it can actuate, so there is no designed way to command one through the path
+// under test, and admitting the method for both would let a consumer bring a
+// firmware zone into force through a proof no design defines.
+func parseControlPath(z *parsedZone, v any) bool {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	method, ok := vocab(obj["method"], controlMethods)
+	if !ok {
+		return false
+	}
+	keys := controlProven
+	if method == ControlUnproven {
+		keys = controlUnproven
+	}
+	leg, ok := closed(obj, keys)
+	if !ok {
+		return false
+	}
+	at, ok := whole(leg["performed_at_ms"])
+	if !ok {
+		return false
+	}
+	observations, ok := leg["observations"].([]any)
+	if !ok {
+		return false
+	}
+	z.controlMethod = method
+	z.controlPerformedAtMs = at
+	if method == ControlUnproven {
+		if _, ok = text(leg["reason"]); !ok {
+			return false
+		}
+		return len(observations) == 0
+	}
+	if z.kind != KindLocalGPIO || len(observations) == 0 {
+		return false
+	}
+	for _, item := range observations {
+		o, ok := parseObservation(item, z.kind)
+		if !ok || o.gpioLevel == "" {
+			// The level actually driven is the evidence this leg exists to
+			// record, so it is required here rather than optional.
+			return false
+		}
+		z.controlObservations = append(z.controlObservations, o)
+	}
+	return true
 }
 
 func parseObservation(v any, kind string) (parsedObservation, bool) {
@@ -815,48 +933,22 @@ func (m Mapping) coilFor(outcome string) string {
 }
 
 func stProofConsistency(b *parsedBinding, prior map[string]ZoneState) *Refusal {
-	contradiction := refuse(StageProofConsistency, ReasonProofContradiction)
 	for _, z := range b.zones {
-		if z.method == MethodUnproven {
-			continue
-		}
-		seen := map[string]bool{}
-		for _, o := range z.observations {
-			seen[o.commanded] = true
-			if o.coilState != z.mapping.coilFor(o.commanded) {
-				return contradiction
-			}
-			opening := o.commanded == OutcomeOpen
-			if opening && o.terminal != CircuitOpen || !opening && o.terminal != CircuitClosed {
-				return contradiction
-			}
-			// The instrument classifies load presence; the reading is evidence.
-			if o.loadBefore != opening || o.loadAfter == opening {
-				return contradiction
-			}
-			if o.hasReadings {
-				delta := o.sensorAfter - o.sensorBefore
-				if math.Abs(delta) <= z.noiseFloor || (delta > 0) != o.loadAfter {
-					return contradiction
-				}
-			}
-			if o.gpioLevel != "" {
-				energised := o.coilState == CoilEnergised
-				expected := GPIOLevelLow
-				if energised == z.activeHigh {
-					expected = GPIOLevelHigh
-				}
-				if o.gpioLevel != expected {
-					return contradiction
-				}
+		if z.method != MethodUnproven {
+			if bad := checkObservations(z, z.observations); bad != nil {
+				return bad
 			}
 		}
-		if !seen[OutcomeOpen] || !seen[OutcomeClose] {
-			return contradiction
+		// The control leg's observations claim the same mapping, so they are
+		// held to the same rules.
+		if z.controlMethod == ControlCommanded {
+			if bad := checkObservations(z, z.controlObservations); bad != nil {
+				return bad
+			}
 		}
 	}
 	// A revision changing actuator identity, mapping or calibration needs a
-	// proof performed after the accepted document.
+	// proof performed after the accepted document, leg by leg.
 	for _, z := range b.zones {
 		was, retained := prior[z.zoneID]
 		if !retained {
@@ -865,9 +957,59 @@ func stProofConsistency(b *parsedBinding, prior map[string]ZoneState) *Refusal {
 		changed := !sameIdentity(was.Identity, z.identity) ||
 			was.Mapping != z.mapping ||
 			was.CalibrationRef != z.calibrationRef
-		if changed && z.performedAtMs <= was.ProofAtMs {
+		if !changed {
+			continue
+		}
+		if z.performedAtMs <= was.ProofAtMs {
 			return refuse(StageProofConsistency, ReasonStaleProof)
 		}
+		// A changed pin or polarity invalidates the control proof too: it was
+		// performed on the wiring this revision replaces.
+		if z.controlMethod == ControlCommanded && was.ControlProofAtMs != nil &&
+			z.controlPerformedAtMs <= *was.ControlProofAtMs {
+			return refuse(StageProofConsistency, ReasonStaleProof)
+		}
+	}
+	return nil
+}
+
+// checkObservations holds a set of observations to the mapping they claim to
+// establish, whichever leg carried them.
+func checkObservations(z parsedZone, observations []parsedObservation) *Refusal {
+	contradiction := refuse(StageProofConsistency, ReasonProofContradiction)
+	seen := map[string]bool{}
+	for _, o := range observations {
+		seen[o.commanded] = true
+		if o.coilState != z.mapping.coilFor(o.commanded) {
+			return contradiction
+		}
+		opening := o.commanded == OutcomeOpen
+		if opening && o.terminal != CircuitOpen || !opening && o.terminal != CircuitClosed {
+			return contradiction
+		}
+		// The instrument classifies load presence; the reading is evidence.
+		if o.loadBefore != opening || o.loadAfter == opening {
+			return contradiction
+		}
+		if o.hasReadings {
+			delta := o.sensorAfter - o.sensorBefore
+			if math.Abs(delta) <= z.noiseFloor || (delta > 0) != o.loadAfter {
+				return contradiction
+			}
+		}
+		if o.gpioLevel != "" {
+			energised := o.coilState == CoilEnergised
+			expected := GPIOLevelLow
+			if energised == z.activeHigh {
+				expected = GPIOLevelHigh
+			}
+			if o.gpioLevel != expected {
+				return contradiction
+			}
+		}
+	}
+	if !seen[OutcomeOpen] || !seen[OutcomeClose] {
+		return contradiction
 	}
 	return nil
 }
@@ -1012,7 +1154,15 @@ func (b *parsedBinding) accepted(signature string) *Accepted {
 			CalibrationRef:     z.calibrationRef,
 			ProofMethod:        z.method,
 			ProofPerformedAtMs: z.performedAtMs,
-			RatedCapacity:      z.capacity,
+			ControlProofMethod: z.controlMethod,
+			ControlProofPerformedAtMs: func() *int64 {
+				if z.controlMethod == "" {
+					return nil
+				}
+				at := z.controlPerformedAtMs
+				return &at
+			}(),
+			RatedCapacity: z.capacity,
 		})
 	}
 	return out

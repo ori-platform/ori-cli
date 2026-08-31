@@ -140,6 +140,21 @@ type Proof struct {
 	// Reason is required for, and only for, an undemonstrated proof.
 	Reason       string
 	Observations []Observation
+	// ControlPath is the control leg, and nil means unproven. The circuit leg
+	// above establishes what the coil does to the circuit; this establishes
+	// that the control input the binding names is what moves that coil.
+	ControlPath *ControlPath
+}
+
+// ControlPath is the second proof leg. `commanded_and_observed` is admissible
+// only for a local_gpio actuator, and `gpio_level` is required on each of its
+// observations: the level actually driven is the evidence this leg records.
+type ControlPath struct {
+	Method        string
+	PerformedAtMs int64
+	// Reason is required for, and only for, an undemonstrated leg.
+	Reason       string
+	Observations []Observation
 }
 
 // Observation is one commanded outcome and what was measured.
@@ -290,6 +305,46 @@ func (i Identity) canonicalValue(kind string) (map[string]any, error) {
 	}
 }
 
+func (c ControlPath) canonicalValue() (map[string]any, error) {
+	at, err := d011.Int(c.PerformedAtMs)
+	if err != nil {
+		return nil, fmt.Errorf("performed_at_ms: %w", err)
+	}
+	obs := make([]any, 0, len(c.Observations))
+	for i, o := range c.Observations {
+		ov, err := o.canonicalValue()
+		if err != nil {
+			return nil, fmt.Errorf("observations[%d]: %w", i, err)
+		}
+		obs = append(obs, ov)
+	}
+	out := map[string]any{
+		"method":          c.Method,
+		"performed_at_ms": at,
+		"observations":    obs,
+	}
+	switch c.Method {
+	case ControlUnproven:
+		if c.Reason == "" {
+			return nil, fmt.Errorf("an undemonstrated control leg must carry a reason")
+		}
+		if len(c.Observations) != 0 {
+			return nil, fmt.Errorf("an undemonstrated control leg must carry no observations")
+		}
+		out["reason"] = c.Reason
+	case ControlCommanded:
+		if c.Reason != "" {
+			return nil, fmt.Errorf("only an undemonstrated control leg carries a reason")
+		}
+		if len(c.Observations) == 0 {
+			return nil, fmt.Errorf("a commanded control leg must carry observations")
+		}
+	default:
+		return nil, fmt.Errorf("control_path method %q is not a control method", c.Method)
+	}
+	return out, nil
+}
+
 func (p Proof) canonicalValue() (map[string]any, error) {
 	at, err := d011.Int(p.PerformedAtMs)
 	if err != nil {
@@ -307,6 +362,13 @@ func (p Proof) canonicalValue() (map[string]any, error) {
 		"method":          p.Method,
 		"performed_at_ms": at,
 		"observations":    obs,
+	}
+	if p.ControlPath != nil {
+		leg, err := p.ControlPath.canonicalValue()
+		if err != nil {
+			return nil, fmt.Errorf("control_path: %w", err)
+		}
+		out["control_path"] = leg
 	}
 	if p.Method == MethodUnproven {
 		if p.Reason == "" {

@@ -124,6 +124,22 @@ type wire struct {
 				SensorAfter  *float64 `json:"sensor_after"`
 				Instrument   string   `json:"instrument"`
 			} `json:"observations"`
+			ControlPath *struct {
+				Method        string `json:"method"`
+				PerformedAtMs int64  `json:"performed_at_ms"`
+				Reason        string `json:"reason"`
+				Observations  []struct {
+					Commanded    string   `json:"commanded"`
+					CoilState    string   `json:"coil_state"`
+					Terminal     string   `json:"terminal_state_observed"`
+					LoadBefore   bool     `json:"load_present_before"`
+					LoadAfter    bool     `json:"load_present_after"`
+					GPIOLevel    string   `json:"gpio_level"`
+					SensorBefore *float64 `json:"sensor_before"`
+					SensorAfter  *float64 `json:"sensor_after"`
+					Instrument   string   `json:"instrument"`
+				} `json:"observations"`
+			} `json:"control_path"`
 		} `json:"proof"`
 	} `json:"zones"`
 }
@@ -170,6 +186,22 @@ func typedFrom(t *testing.T, raw json.RawMessage) binding.Binding {
 				Method: z.Proof.Method, PerformedAtMs: z.Proof.PerformedAtMs,
 				Reason: z.Proof.Reason,
 			},
+		}
+		if leg := z.Proof.ControlPath; leg != nil {
+			cp := &binding.ControlPath{
+				Method: leg.Method, PerformedAtMs: leg.PerformedAtMs,
+				Reason: leg.Reason,
+			}
+			for _, o := range leg.Observations {
+				cp.Observations = append(cp.Observations, binding.Observation{
+					Commanded: o.Commanded, CoilState: o.CoilState,
+					TerminalStateObserved: o.Terminal,
+					LoadPresentBefore:     o.LoadBefore, LoadPresentAfter: o.LoadAfter,
+					GPIOLevel: o.GPIOLevel, SensorBefore: o.SensorBefore,
+					SensorAfter: o.SensorAfter, Instrument: o.Instrument,
+				})
+			}
+			zone.Proof.ControlPath = cp
 		}
 		for _, o := range z.Proof.Observations {
 			zone.Proof.Observations = append(zone.Proof.Observations, binding.Observation{
