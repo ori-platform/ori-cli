@@ -108,6 +108,8 @@ type wireContext struct {
 		Mapping        map[string]string `json:"mapping"`
 		CalibrationRef string            `json:"calibration_ref"`
 		ProofAtMs      int64             `json:"proof_at_ms"`
+		// Absent when the retained document carried no control leg.
+		ControlProofAtMs *int64 `json:"control_proof_at_ms"`
 	} `json:"accepted_zone_state"`
 	FirmwareDeviceID string            `json:"firmware_device_id"`
 	Channel          string            `json:"channel"`
@@ -183,10 +185,11 @@ func bindingContext(t testing.TB, raw json.RawMessage) binding.Context {
 	}
 	for zoneID, was := range w.AcceptedZoneState {
 		ctx.AcceptedZoneState[zoneID] = binding.ZoneState{
-			Identity:       was.Identity,
-			Mapping:        mappingOf(was.Mapping),
-			CalibrationRef: was.CalibrationRef,
-			ProofAtMs:      was.ProofAtMs,
+			Identity:         was.Identity,
+			Mapping:          mappingOf(was.Mapping),
+			CalibrationRef:   was.CalibrationRef,
+			ProofAtMs:        was.ProofAtMs,
+			ControlProofAtMs: was.ControlProofAtMs,
 		}
 	}
 	return ctx
