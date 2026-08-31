@@ -122,14 +122,6 @@ func (a ActuatorRef) key() string {
 // ZoneState is what a consumer retained from the binding in force, per zone,
 // for the revision rule: a changed actuator cannot inherit the proof of the
 // one it replaced.
-// The control leg's own method vocabulary. `commanded_and_observed` establishes
-// that the control input this binding names, at its declared active_high, is
-// what moves that coil; `undemonstrated` records that nothing was shown.
-const (
-	ControlCommanded = "commanded_and_observed"
-	ControlUnproven  = "undemonstrated"
-)
-
 type ZoneState struct {
 	// Identity is the full identity object, active_high included, as the
 	// accepted document carried it.
@@ -139,9 +131,20 @@ type ZoneState struct {
 	ProofAtMs      int64
 	// ControlProofAtMs is nil when the retained document carried no control
 	// leg, in which case a revision's control leg is fresh by construction:
-	// there is nothing it could be inheriting.
+	// there is nothing it could be inheriting. A caller reconstructing this
+	// from a stored row MUST carry the field through: dropping it reads as
+	// "no leg was ever proven" and lets a revision reuse a stale control
+	// proof.
 	ControlProofAtMs *int64
 }
+
+// The control leg's own method vocabulary. `commanded_and_observed` establishes
+// that the control input this binding names, at its declared active_high, is
+// what moves that coil; `undemonstrated` records that nothing was shown.
+const (
+	ControlCommanded = "commanded_and_observed"
+	ControlUnproven  = "undemonstrated"
+)
 
 // Context is everything a binding verdict depends on that is not in the
 // document. A nil anchor is an absent anchor.
@@ -197,8 +200,9 @@ type AcceptedZone struct {
 // local_gpio zone can: the commanded method names an operation that has no
 // design for a firmware channel.
 func (z AcceptedZone) InForceEligible() bool {
+	circuitProven := z.ProofMethod == MethodActuate || z.ProofMethod == MethodPreEnergy
 	return z.Kind == KindLocalGPIO &&
-		z.ProofMethod != MethodUnproven &&
+		circuitProven &&
 		z.ControlProofMethod == ControlCommanded
 }
 

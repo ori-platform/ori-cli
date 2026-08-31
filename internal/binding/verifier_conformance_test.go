@@ -37,6 +37,7 @@ type rejectCase struct {
 	Reason          string          `json:"reason"`
 	Stage           string          `json:"stage"`
 	SignatureValid  *bool           `json:"signature_valid"`
+	ExpectedState   string          `json:"expected_state"`
 }
 
 type envelopeCase struct {
@@ -235,6 +236,19 @@ func indexOf(order []string, stage string) int {
 	return -1
 }
 
+func TestPublishedBindingsExerciseBothStates(t *testing.T) {
+	c := loadFullCorpus(t)
+	seen := map[string]bool{}
+	for _, vc := range c.Cases {
+		seen[vc.ExpectedState] = true
+	}
+	for _, state := range []string{"provisional", "in_force"} {
+		if !seen[state] {
+			t.Errorf("no accept case reaches %s", state)
+		}
+	}
+}
+
 func TestVerifierAcceptsEveryPublishedBinding(t *testing.T) {
 	c := loadFullCorpus(t)
 	for _, vc := range c.Cases {
@@ -249,6 +263,19 @@ func TestVerifierAcceptsEveryPublishedBinding(t *testing.T) {
 			}
 			if accepted.CanonicalHash != vc.CanonicalSHA256 {
 				t.Fatalf("retained hash %s; contract %s", accepted.CanonicalHash, vc.CanonicalSHA256)
+			}
+			// Passing every stage is verification; the state is what it
+			// authorises. An empty declaration is a corpus that stopped
+			// carrying the field, not a case to wave through.
+			if vc.ExpectedState == "" {
+				t.Fatal("accept case declares no expected_state")
+			}
+			reached := "provisional"
+			if accepted.InForceEligible() {
+				reached = "in_force"
+			}
+			if reached != vc.ExpectedState {
+				t.Fatalf("reached %s; contract declares %s", reached, vc.ExpectedState)
 			}
 			message, err := canonicaljson.MarshalWire(env)
 			if err != nil || hex.EncodeToString(message) != vc.MessageHex {
