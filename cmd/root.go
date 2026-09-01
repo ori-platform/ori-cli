@@ -88,6 +88,14 @@ func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts 
 		if errors.As(err, &reported) {
 			return 1
 		}
+		var refusal refusedError
+		if errors.As(err, &refusal) {
+			// A refusal is the system working. An installer needs it
+			// distinguishable from a broken tool, so it does not share an exit
+			// status with one.
+			output.Error(stderr, state.json, err.Error())
+			return 2
+		}
 		output.Error(stderr, state.json, err.Error())
 		return 1
 	}
@@ -127,6 +135,7 @@ func newRootCommand(state *rootState) *cobra.Command {
 	root.AddCommand(newStateCommand(state))
 	root.AddCommand(newDeployCommand(state))
 	root.AddCommand(newFirmwareCommand(state))
+	root.AddCommand(newBindingCommand(state))
 	return root
 }
 
