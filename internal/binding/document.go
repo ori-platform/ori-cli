@@ -456,27 +456,37 @@ func (b Binding) Check() error {
 	return nil
 }
 
-// Sign returns the wire envelope for this binding.
+// sign checks the key against the SigningKey the document names and the
+// document as a consumer would check it, then returns the canonical preimage
+// and the signature over it.
 //
-// The key is checked against the SigningKey the document names. A binding whose
-// named key is not the one that signed it is refused here rather than by every
-// consumer that later fails to verify it, and the mismatch is exactly the case
-// the contract's authority stage exists to catch. The document is then checked
-// as a consumer would check it, so nothing is signed that would be refused.
-func (b Binding) Sign(key ed25519.PrivateKey) (map[string]any, error) {
+// A binding whose named key is not the one that signed it is refused here
+// rather than by every consumer that later fails to verify it, and the
+// mismatch is exactly the case the contract's authority stage exists to catch.
+// Nothing is signed that a consumer would refuse.
+func (b Binding) sign(key ed25519.PrivateKey) ([]byte, string, error) {
 	pub, ok := key.Public().(ed25519.PublicKey)
 	if !ok {
-		return nil, fmt.Errorf("signing key is not ed25519")
+		return nil, "", fmt.Errorf("signing key is not ed25519")
 	}
-	named := "ed25519:" + base64.StdEncoding.EncodeToString(pub)
+	named := SigningKeyName(pub)
 	if b.SigningKey != named {
-		return nil, fmt.Errorf(
+		return nil, "", fmt.Errorf(
 			"binding names signing_key %q but was signed by %q", b.SigningKey, named)
 	}
 	if err := b.Check(); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	preimage, err := b.Preimage()
+	if err != nil {
+		return nil, "", err
+	}
+	return preimage, "ed25519:" + base64.StdEncoding.EncodeToString(ed25519.Sign(key, preimage)), nil
+}
+
+// Sign returns the wire envelope for this binding as a value.
+func (b Binding) Sign(key ed25519.PrivateKey) (map[string]any, error) {
+	_, signature, err := b.sign(key)
 	if err != nil {
 		return nil, err
 	}
@@ -484,8 +494,22 @@ func (b Binding) Sign(key ed25519.PrivateKey) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{
-		"binding":   value,
-		"signature": "ed25519:" + base64.StdEncoding.EncodeToString(ed25519.Sign(key, preimage)),
-	}, nil
+	return map[string]any{"binding": value, "signature": signature}, nil
+}
+
+// SignedEnvelope returns the wire envelope as bytes, with the binding in its
+// canonical form so the file carries exactly what was signed, and the
+// signature text alongside.
+func (b Binding) SignedEnvelope(key ed25519.PrivateKey) ([]byte, string, error) {
+	preimage, signature, err := b.sign(key)
+	if err != nil {
+		return nil, "", err
+	}
+	envelope := make([]byte, 0, len(preimage)+len(signature)+32)
+	envelope = append(envelope, `{"binding":`...)
+	envelope = append(envelope, preimage...)
+	envelope = append(envelope, `,"signature":"`...)
+	envelope = append(envelope, signature...)
+	envelope = append(envelope, `"}`...)
+	return envelope, signature, nil
 }

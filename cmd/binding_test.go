@@ -155,7 +155,10 @@ func TestExportRefusesAnIncompleteLeg(t *testing.T) {
 }
 
 func stateWith(bridge BridgeRunner, stdout, stderr *bytes.Buffer) *rootState {
-	return &rootState{stdout: stdout, stderr: stderr, bridge: bridge}
+	return &rootState{
+		stdout: stdout, stderr: stderr, bridge: bridge,
+		nowMs: func() int64 { return 1800000000000 },
+	}
 }
 
 const inventoryOK = `{"ok":true,"result":{"device_id":"bench-01",
