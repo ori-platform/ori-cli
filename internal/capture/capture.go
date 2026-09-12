@@ -63,7 +63,7 @@ const (
 // The draft is checked as a consumer would check it before it is returned, so
 // an implausible rated capacity or a self-contradicting mapping fails here —
 // where the installer can still see the wiring — rather than at a device.
-func Capture(a Asker, inv Inventory, zoneID string) (binding.Binding, error) {
+func Capture(a Asker, inv Inventory, zoneID string, nowMs int64) (binding.Binding, error) {
 	if strings.TrimSpace(zoneID) == "" {
 		return binding.Binding{}, fmt.Errorf(
 			"a zone needs a name: it is what an inventory comparison and every " +
@@ -156,7 +156,7 @@ func Capture(a Asker, inv Inventory, zoneID string) (binding.Binding, error) {
 		return binding.Binding{}, err
 	}
 
-	proof, err := captureProof(a, mapping)
+	proof, err := captureProof(a, mapping, nowMs)
 	if err != nil {
 		return binding.Binding{}, err
 	}
@@ -315,7 +315,7 @@ func captureMapping(a Asker) (binding.Mapping, error) {
 // the runtime commanding the coil, and its observations are read back from the
 // runtime rather than typed here. A leg this tool authored would record what
 // the tool asserted.
-func captureProof(a Asker, mapping binding.Mapping) (binding.Proof, error) {
+func captureProof(a Asker, mapping binding.Mapping, nowMs int64) (binding.Proof, error) {
 	method, err := a.Choose(
 		"How was the circuit leg established?",
 		[]string{binding.MethodPreEnergy, binding.MethodUnproven})
@@ -333,8 +333,12 @@ func captureProof(a Asker, mapping binding.Mapping) (binding.Proof, error) {
 					"reason would leave the document claiming less than it knows")
 		}
 		// Its observations must be empty: a zone carrying them is claiming a
-		// proof it also says it does not have.
-		return binding.Proof{Method: method, Reason: strings.TrimSpace(reason)}, nil
+		// proof it also says it does not have. The time recorded is when the
+		// determination was made, which the contract requires on this method
+		// as on the others.
+		return binding.Proof{
+			Method: method, Reason: strings.TrimSpace(reason), PerformedAtMs: nowMs,
+		}, nil
 	}
 
 	performedAt, err := askInt(a,

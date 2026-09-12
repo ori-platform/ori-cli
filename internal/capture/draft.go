@@ -35,22 +35,21 @@ func DraftJSON(b binding.Binding) ([]byte, error) {
 		if z.Proof.Reason != "" {
 			proof["reason"] = z.Proof.Reason
 		}
-		if z.Proof.Method != binding.MethodUnproven {
-			// Closed per method: an undemonstrated proof carries neither, and
-			// carrying them would claim a proof it says it does not have.
-			proof["performed_at_ms"] = z.Proof.PerformedAtMs
-			observations := make([]map[string]any, 0, len(z.Proof.Observations))
-			for _, o := range z.Proof.Observations {
-				observations = append(observations, map[string]any{
-					"commanded":               o.Commanded,
-					"coil_state":              o.CoilState,
-					"terminal_state_observed": o.TerminalStateObserved,
-					"load_present_before":     o.LoadPresentBefore,
-					"load_present_after":      o.LoadPresentAfter,
-				})
-			}
-			proof["observations"] = observations
+		// The contract's shape on every method: an undemonstrated proof
+		// carries the time the determination was made and an empty list, and
+		// a draft that omitted them would have signing invent both.
+		proof["performed_at_ms"] = z.Proof.PerformedAtMs
+		observations := make([]map[string]any, 0, len(z.Proof.Observations))
+		for _, o := range z.Proof.Observations {
+			observations = append(observations, map[string]any{
+				"commanded":               o.Commanded,
+				"coil_state":              o.CoilState,
+				"terminal_state_observed": o.TerminalStateObserved,
+				"load_present_before":     o.LoadPresentBefore,
+				"load_present_after":      o.LoadPresentAfter,
+			})
 		}
+		proof["observations"] = observations
 		zones = append(zones, map[string]any{
 			"zone_id": z.ZoneID,
 			"rated_capacity": map[string]any{

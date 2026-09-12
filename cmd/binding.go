@@ -175,7 +175,7 @@ installer can see before capturing what this device will accept.`,
 	}
 	candidatesCmd.Flags().String("path", "ori.yaml", "path to the runtime configuration")
 
-	cmd.AddCommand(candidatesCmd, proveCmd, exportCmd, captureCmd, deliverCmd)
+	cmd.AddCommand(candidatesCmd, proveCmd, exportCmd, captureCmd, deliverCmd, newBindingSignCommand(state))
 	return cmd
 }
 
@@ -214,7 +214,7 @@ func runBindingCapture(
 	}
 
 	asker := capture.NewTerminalAsker(in, state.stderr)
-	draft, captureErr := capture.Capture(asker, inv, zone)
+	draft, captureErr := capture.Capture(asker, inv, zone, state.nowMs())
 	if captureErr != nil {
 		return refusedError{captureErr}
 	}

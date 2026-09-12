@@ -135,7 +135,7 @@ func answersWith(overrides map[int]string) []string {
 
 func TestCandidatesComeFromTheInventory(t *testing.T) {
 	s := &scripted{answers: goodAnswers()}
-	if _, err := Capture(s, inventory(), "main"); err != nil {
+	if _, err := captureAt(s, inventory(), "main"); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	if got := s.offered[0]; len(got) != 1 || got[0] != "load-current-main" {
@@ -152,7 +152,7 @@ func TestPolarityIsAskedAndRecorded(t *testing.T) {
 		want   bool
 	}{{"high", true}, {"low", false}} {
 		answers := answersWith(map[int]string{qPolarity: tc.answer})
-		draft, err := Capture(&scripted{answers: answers}, inventory(), "main")
+		draft, err := captureAt(&scripted{answers: answers}, inventory(), "main")
 		if err != nil {
 			t.Fatalf("capture: %v", err)
 		}
@@ -170,7 +170,7 @@ func TestPolarityIsAskedAndRecorded(t *testing.T) {
 // from the other.
 func TestTheMappingIsAskedNotInferred(t *testing.T) {
 	s := &scripted{answers: goodAnswers()}
-	if _, err := Capture(s, inventory(), "main"); err != nil {
+	if _, err := captureAt(s, inventory(), "main"); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	joined := strings.ToLower(strings.Join(s.prompts, " "))
@@ -197,7 +197,7 @@ func TestTheMappingIsAskedNotInferred(t *testing.T) {
 
 func TestOneCoilStateCannotProduceBothOutcomes(t *testing.T) {
 	answers := answersWith(map[int]string{qClose: "energised"}) // same as open
-	_, err := Capture(&scripted{answers: answers}, inventory(), "main")
+	_, err := captureAt(&scripted{answers: answers}, inventory(), "main")
 	if err == nil {
 		t.Fatal("a self-contradicting mapping was accepted")
 	}
@@ -207,7 +207,7 @@ func TestOneCoilStateCannotProduceBothOutcomes(t *testing.T) {
 }
 
 func TestPreEnergisationNeedsNoActuation(t *testing.T) {
-	draft, err := Capture(&scripted{answers: goodAnswers()}, inventory(), "main")
+	draft, err := captureAt(&scripted{answers: goodAnswers()}, inventory(), "main")
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestPreEnergisationNeedsNoActuation(t *testing.T) {
 // tool authored would record what the tool asserted.
 func TestTheCeremonyNeverOffersCommandedAndObserved(t *testing.T) {
 	s := &scripted{answers: goodAnswers()}
-	if _, err := Capture(s, inventory(), "main"); err != nil {
+	if _, err := captureAt(s, inventory(), "main"); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	for _, options := range s.offered {
@@ -237,13 +237,13 @@ func TestTheCeremonyNeverOffersCommandedAndObserved(t *testing.T) {
 
 func TestUndemonstratedRequiresItsReason(t *testing.T) {
 	answers := answersWith(map[int]string{qMethod: binding.MethodUnproven, qPerformedAt: "   "})
-	_, err := Capture(&scripted{answers: answers}, inventory(), "main")
+	_, err := captureAt(&scripted{answers: answers}, inventory(), "main")
 	if err == nil {
 		t.Fatal("an undemonstrated proof was recorded with no reason")
 	}
 
 	answers = answersWith(map[int]string{qMethod: binding.MethodUnproven, qPerformedAt: "no load wired at commissioning"})
-	draft, err := Capture(&scripted{answers: answers}, inventory(), "main")
+	draft, err := captureAt(&scripted{answers: answers}, inventory(), "main")
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -255,13 +255,13 @@ func TestUndemonstratedRequiresItsReason(t *testing.T) {
 func TestADeviceWithNoActuatorHasNoBinding(t *testing.T) {
 	inv := inventory()
 	inv.Actuators = nil
-	if _, err := Capture(&scripted{answers: goodAnswers()}, inv, "main"); err == nil {
+	if _, err := captureAt(&scripted{answers: goodAnswers()}, inv, "main"); err == nil {
 		t.Fatal("a Tier A-only site produced a binding")
 	}
 }
 
 func TestTheDraftSupersedesTheAcceptedSequence(t *testing.T) {
-	draft, err := Capture(&scripted{answers: goodAnswers()}, inventory(), "main")
+	draft, err := captureAt(&scripted{answers: goodAnswers()}, inventory(), "main")
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestTheDraftSupersedesTheAcceptedSequence(t *testing.T) {
 
 func TestCapacityAboveTheSensorRangeIsRefused(t *testing.T) {
 	answers := answersWith(map[int]string{qCapacity: "150", qRangeMax: "100"})
-	_, err := Capture(&scripted{answers: answers}, inventory(), "main")
+	_, err := captureAt(&scripted{answers: answers}, inventory(), "main")
 	if err == nil {
 		t.Fatal("a capacity above the sensor's full scale was accepted")
 	}
@@ -284,7 +284,7 @@ func TestCapacityAboveTheSensorRangeIsRefused(t *testing.T) {
 func TestNonPositiveQuantitiesAreRefused(t *testing.T) {
 	for _, at := range []int{qCapacity, qRangeMax} {
 		answers := answersWith(map[int]string{at: "0"})
-		if _, err := Capture(&scripted{answers: answers}, inventory(), "main"); err == nil {
+		if _, err := captureAt(&scripted{answers: answers}, inventory(), "main"); err == nil {
 			t.Fatalf("a zero quantity at position %d was accepted", at)
 		}
 	}
@@ -332,7 +332,7 @@ func TestTerminalAskerEndingEarlyIsAnError(t *testing.T) {
 func TestTheDraftCarriesWhatCaptureOwnsAndNothingSigningOwns(t *testing.T) {
 	inv := inventory()
 	inv.AcceptedBindingHash = "sha256:prior"
-	draft, err := Capture(&scripted{answers: goodAnswers()}, inv, "main")
+	draft, err := captureAt(&scripted{answers: goodAnswers()}, inv, "main")
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestTheDraftCarriesWhatCaptureOwnsAndNothingSigningOwns(t *testing.T) {
 
 // A first binding supersedes nothing, and absence is what says so.
 func TestAFirstBindingSupersedesNothing(t *testing.T) {
-	draft, err := Capture(&scripted{answers: goodAnswers()}, inventory(), "main")
+	draft, err := captureAt(&scripted{answers: goodAnswers()}, inventory(), "main")
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -425,9 +425,18 @@ func TestAFirstBindingSupersedesNothing(t *testing.T) {
 	}
 }
 
-// An unproven zone carrying observations claims a proof it also says it lacks.
+// testNowMs is the clock every capture in this file runs under.
+const testNowMs int64 = 1800000000000
+
+func captureAt(a Asker, inv Inventory, zoneID string) (binding.Binding, error) {
+	return Capture(a, inv, zoneID, testNowMs)
+}
+
+// An unproven zone carrying observations claims a proof it also says it lacks;
+// what it does carry is when that was determined, as the contract's grammar
+// requires on every method.
 func TestAnUndemonstratedProofCarriesNoObservations(t *testing.T) {
-	draft, err := Capture(&scripted{answers: answersWith(map[int]string{
+	draft, err := captureAt(&scripted{answers: answersWith(map[int]string{
 		qMethod:      binding.MethodUnproven,
 		qPerformedAt: "no load was wired at commissioning",
 	})}, inventory(), "main")
@@ -438,11 +447,11 @@ func TestAnUndemonstratedProofCarriesNoObservations(t *testing.T) {
 	var body map[string]any
 	_ = json.Unmarshal(encoded, &body)
 	proof := body["zones"].([]any)[0].(map[string]any)["proof"].(map[string]any)
-	if _, present := proof["observations"]; present {
-		t.Fatal("an undemonstrated proof carries observations")
+	if observations, ok := proof["observations"].([]any); !ok || len(observations) != 0 {
+		t.Fatalf("an undemonstrated proof carries observations, or no list at all: %v", proof["observations"])
 	}
-	if _, present := proof["performed_at_ms"]; present {
-		t.Fatal("an undemonstrated proof carries a performed_at_ms")
+	if at, ok := proof["performed_at_ms"].(float64); !ok || int64(at) != testNowMs {
+		t.Fatalf("an undemonstrated proof records when it was determined; got %v", proof["performed_at_ms"])
 	}
 	if proof["reason"] == nil || proof["reason"] == "" {
 		t.Fatal("the reason was not recorded")
@@ -452,7 +461,7 @@ func TestAnUndemonstratedProofCarriesNoObservations(t *testing.T) {
 // A noise floor of zero would let any reading count as a change.
 func TestANoiseFloorMustBePositive(t *testing.T) {
 	for _, value := range []string{"0", "-1"} {
-		_, err := Capture(&scripted{answers: answersWith(map[int]string{
+		_, err := captureAt(&scripted{answers: answersWith(map[int]string{
 			qNoiseFloor: value,
 		})}, inventory(), "main")
 		if err == nil {
@@ -466,7 +475,7 @@ func TestDirectionIsAskedAndHasNoDefault(t *testing.T) {
 	s := &scripted{answers: answersWith(map[int]string{
 		qDirection: "negative_is_load_draw",
 	})}
-	draft, err := Capture(s, inventory(), "main")
+	draft, err := captureAt(s, inventory(), "main")
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -478,7 +487,7 @@ func TestDirectionIsAskedAndHasNoDefault(t *testing.T) {
 // A capacity is a safety parameter and an audit needs to know what kind of
 // claim it was, so it is asked rather than stamped.
 func TestProvenanceIsAsked(t *testing.T) {
-	draft, err := Capture(&scripted{answers: answersWith(map[int]string{
+	draft, err := captureAt(&scripted{answers: answersWith(map[int]string{
 		qProvenance: "installer_measured",
 	})}, inventory(), "main")
 	if err != nil {
@@ -497,7 +506,7 @@ func TestAnObservationWithNoLoadChangeIsRefused(t *testing.T) {
 		{qCloseLoadBefore: "yes"}, // already drawing before a close
 		{qCloseLoadAfter: "no"},   // still idle after it
 	} {
-		if _, err := Capture(
+		if _, err := captureAt(
 			&scripted{answers: answersWith(override)}, inventory(), "main",
 		); err == nil {
 			t.Fatalf("a vacuous observation was accepted: %v", override)
@@ -506,7 +515,7 @@ func TestAnObservationWithNoLoadChangeIsRefused(t *testing.T) {
 }
 
 func TestACalibrationReferenceIsRequired(t *testing.T) {
-	if _, err := Capture(&scripted{answers: answersWith(map[int]string{
+	if _, err := captureAt(&scripted{answers: answersWith(map[int]string{
 		qCalibration: "   ",
 	})}, inventory(), "main"); err == nil {
 		t.Fatal("a sensor with no calibration reference was accepted")
@@ -516,7 +525,7 @@ func TestACalibrationReferenceIsRequired(t *testing.T) {
 func TestATerminalStateThatContradictsTheMappingIsRefused(t *testing.T) {
 	// de-energising closes the circuit, so the de-energised state is "closed".
 	answers := answersWith(map[int]string{qTerminal: "open"})
-	_, err := Capture(&scripted{answers: answers}, inventory(), "main")
+	_, err := captureAt(&scripted{answers: answers}, inventory(), "main")
 	if err == nil {
 		t.Fatal("a zone that reads as failing safe while it fails closed was accepted")
 	}
@@ -534,12 +543,12 @@ func TestTheContradictionIsCheckedInBothDirections(t *testing.T) {
 		qTerminal: "closed", // de-energising now opens, so this contradicts
 	}
 	answers := answersWith(reversed)
-	if _, err := Capture(&scripted{answers: answers}, inventory(), "main"); err == nil {
+	if _, err := captureAt(&scripted{answers: answers}, inventory(), "main"); err == nil {
 		t.Fatal("the reversed mapping was not checked")
 	}
 	reversed[qTerminal] = "open"
 	answers = answersWith(reversed)
-	if _, err := Capture(&scripted{answers: answers}, inventory(), "main"); err != nil {
+	if _, err := captureAt(&scripted{answers: answers}, inventory(), "main"); err != nil {
 		t.Fatalf("a consistent reversed mapping was refused: %v", err)
 	}
 }
@@ -550,7 +559,7 @@ func TestAQuantityACircuitCannotHaveIsRefused(t *testing.T) {
 	// 0x1p3 is 8: inside the sensor range and above zero, so only the check
 	// that refuses hexadecimal can catch it.
 	for _, value := range []string{"NaN", "nan", "Inf", "+Inf", "-Inf", "0x1p3"} {
-		if _, err := Capture(&scripted{answers: answersWith(map[int]string{
+		if _, err := captureAt(&scripted{answers: answersWith(map[int]string{
 			qCapacity: value,
 		})}, inventory(), "main"); err == nil {
 			t.Fatalf("%q was accepted as a rated capacity", value)
@@ -560,13 +569,13 @@ func TestAQuantityACircuitCannotHaveIsRefused(t *testing.T) {
 
 func TestAZoneNeedsANameThatSurvivesRecording(t *testing.T) {
 	for _, zone := range []string{"", "   ", "zone-\xff"} {
-		if _, err := Capture(
+		if _, err := captureAt(
 			&scripted{answers: goodAnswers()}, inventory(), zone,
 		); err == nil {
 			t.Fatalf("zone %q was accepted", zone)
 		}
 	}
-	draft, err := Capture(&scripted{answers: goodAnswers()}, inventory(), "  main  ")
+	draft, err := captureAt(&scripted{answers: goodAnswers()}, inventory(), "  main  ")
 	if err != nil {
 		t.Fatalf("capture: %v", err)
 	}
@@ -584,7 +593,7 @@ func TestAZoneNeedsANameThatSurvivesRecording(t *testing.T) {
 func TestTheProofCanContradictTheMappingItTests(t *testing.T) {
 	// The mapping says opening needs the coil energised. The installer observed
 	// it de-energised: the mapping describes wiring this is not.
-	_, err := Capture(&scripted{answers: answersWith(map[int]string{
+	_, err := captureAt(&scripted{answers: answersWith(map[int]string{
 		qOpenCoil: "de_energised",
 	})}, inventory(), "main")
 	if err == nil {
@@ -595,7 +604,7 @@ func TestTheProofCanContradictTheMappingItTests(t *testing.T) {
 	}
 
 	// And the circuit must actually do what the command names.
-	_, err = Capture(&scripted{answers: answersWith(map[int]string{
+	_, err = captureAt(&scripted{answers: answersWith(map[int]string{
 		qOpenTerminal: "closed",
 	})}, inventory(), "main")
 	if err == nil {
@@ -609,7 +618,7 @@ func TestTheProofCanContradictTheMappingItTests(t *testing.T) {
 // Both facts are asked for each outcome, not inferred from one another.
 func TestBothObservedFactsAreAsked(t *testing.T) {
 	s := &scripted{answers: goodAnswers()}
-	if _, err := Capture(s, inventory(), "main"); err != nil {
+	if _, err := captureAt(s, inventory(), "main"); err != nil {
 		t.Fatalf("capture: %v", err)
 	}
 	var coilQuestions, terminalQuestions int

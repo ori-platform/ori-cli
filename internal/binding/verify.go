@@ -1220,6 +1220,63 @@ func VerifyEnvelope(raw []byte, ctx Context) (*Accepted, error) {
 	return b.accepted(sigText), nil
 }
 
+// OfflineStages are the stages an envelope passes with nothing but itself: the
+// grammar, the signature against the key the document names, and the
+// document-only stages. DeliveryStages are what a runtime decides from its own
+// anchors, accepted chain, declared inventory and posture; an offline verdict
+// never claims them.
+var (
+	OfflineStages = []string{
+		StageParses, StageSignature, StageMappingSelfConsistency,
+		StageProofConsistency, StageBounds, StageDisambiguation,
+	}
+	DeliveryStages = []string{
+		StageDeviceID, StageKeySelection, StageAuthority, StageFreshness,
+		StageInventory, StageActivationPosture,
+	}
+	// DeferredChecks are the two checks inside OfflineStages that need what
+	// only the runtime holds, named so an offline verdict cannot be read as
+	// having made them.
+	DeferredChecks = []string{
+		StageProofConsistency + ": a revision's proof freshness against the zone state the runtime retained",
+		StageBounds + ": the trip point, capacity times the profile multiplier, against the sensor's full scale",
+	}
+)
+
+// VerifyOffline verifies an envelope through OfflineStages. A non-nil error is
+// always a *Refusal. The signature is checked against the key the document
+// names, which proves the envelope is internally consistent and nothing about
+// whether that key is an authority the device trusts. Two checks inside these
+// stages need what only the runtime holds and are therefore delivery's as
+// well: the trip point, which is the capacity times a profile multiplier, and
+// a revision's proof freshness against the zone state the runtime retained.
+func VerifyOffline(raw []byte) (*Accepted, error) {
+	body, sig, sigText, r := parseEnvelope(raw, "binding")
+	if r != nil {
+		return nil, r
+	}
+	b, r := stParses(body)
+	if r != nil {
+		return nil, r
+	}
+	if r := verifySignature(b.signingKey, b.canonical, sig); r != nil {
+		return nil, r
+	}
+	if r := stMappingSelfConsistency(b); r != nil {
+		return nil, r
+	}
+	if r := stProofConsistency(b, nil); r != nil {
+		return nil, r
+	}
+	if r := stBounds(b, nil); r != nil {
+		return nil, r
+	}
+	if r := stDisambiguation(b); r != nil {
+		return nil, r
+	}
+	return b.accepted(sigText), nil
+}
+
 func sameDigest(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == nil && b == nil
