@@ -1,11 +1,11 @@
 module github.com/ori-platform/ori-cli
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/ori-platform/ori-canonicaljson v0.1.0
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.45.0
 )
 
