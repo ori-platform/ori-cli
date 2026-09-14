@@ -275,8 +275,7 @@ type welcomeColors struct {
 	dim    string
 }
 
-// Values come from the Ori design-system tokens in
-// ori-energy/apps/web/src/demo/demo.css (--mktg-orange, --ori-mint,
+// Values come from the Ori design-system tokens (--mktg-orange, --ori-mint,
 // --tier-a, --tier-c, --muted).
 func welcomeStyle(useColor bool) welcomeColors {
 	if !useColor {
