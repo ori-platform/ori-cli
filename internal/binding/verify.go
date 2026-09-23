@@ -26,6 +26,7 @@ import (
 	"io"
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -125,10 +126,13 @@ func (a ActuatorRef) key() string {
 type ZoneState struct {
 	// Identity is the full identity object, active_high included, as the
 	// accepted document carried it.
-	Identity       map[string]any
-	Mapping        Mapping
-	CalibrationRef string
-	ProofAtMs      int64
+	Identity map[string]any
+	Mapping  Mapping
+	// Sensor is the whole sensor object, calibration_ref included: a proof
+	// records that this sensor observes this circuit, so a revision changing
+	// any of it asserts an association the retained proof never observed.
+	Sensor    Sensor
+	ProofAtMs int64
 	// ControlProofAtMs is nil when the retained document carried no control
 	// leg, in which case a revision's control leg is fresh by construction:
 	// there is nothing it could be inheriting. A caller reconstructing this
@@ -136,6 +140,9 @@ type ZoneState struct {
 	// "no leg was ever proven" and lets a revision reuse a stale control
 	// proof.
 	ControlProofAtMs *int64
+	// Seq is the zone's position in the retained document. The revision rule
+	// visits retained zones in that order, and in name order among equal Seq.
+	Seq int
 }
 
 // The control leg's own method vocabulary. `commanded_and_observed` establishes
@@ -187,6 +194,7 @@ type AcceptedZone struct {
 	Identity           map[string]any
 	Mapping            Mapping
 	CalibrationRef     string
+	Sensor             Sensor
 	ProofMethod        string
 	ProofPerformedAtMs int64
 	// ControlProofMethod is "" when the leg is absent. Absence denies; a
@@ -492,6 +500,7 @@ type parsedZone struct {
 	rangeMax       float64
 	noiseFloor     float64
 	calibrationRef string
+	sensor         Sensor
 	kind           string
 	identity       map[string]any
 	ref            ActuatorRef
@@ -580,6 +589,12 @@ func parseZone(v any) (parsedZone, bool) {
 	}
 	if !(z.rangeMin < z.rangeMax) || z.noiseFloor <= 0 {
 		return z, false
+	}
+	z.sensor = Sensor{
+		SensorID: z.sensorID, Quantity: sensor["quantity"].(string),
+		Unit: sensor["unit"].(string), RangeMin: z.rangeMin, RangeMax: z.rangeMax,
+		Direction: sensor["direction"].(string), NoiseFloor: z.noiseFloor,
+		CalibrationRef: z.calibrationRef,
 	}
 
 	actuator, ok := closed(obj["actuator"], actuatorKeys)
@@ -933,6 +948,15 @@ func (m Mapping) coilFor(outcome string) string {
 }
 
 func stProofConsistency(b *parsedBinding, prior map[string]ZoneState) *Refusal {
+	if r := stObservations(b); r != nil {
+		return r
+	}
+	return stRevisionRule(b, prior)
+}
+
+// stObservations holds each claimed leg's observations to the mapping they
+// claim to establish.
+func stObservations(b *parsedBinding) *Refusal {
 	for _, z := range b.zones {
 		if z.method != MethodUnproven {
 			if bad := checkObservations(z, z.observations); bad != nil {
@@ -947,30 +971,71 @@ func stProofConsistency(b *parsedBinding, prior map[string]ZoneState) *Refusal {
 			}
 		}
 	}
-	// A revision changing actuator identity, mapping or calibration needs a
-	// proof performed after the accepted document, leg by leg.
+	return nil
+}
+
+// stRevisionRule is the revision rule: a changed zone cannot inherit the proof
+// of the hardware it replaced.
+func stRevisionRule(b *parsedBinding, prior map[string]ZoneState) *Refusal {
+	// A revision changing anything in a zone but its rated capacity -- the
+	// sensor, the actuator identity or the mapping -- needs a proof performed
+	// after the accepted document, leg by leg.
+	//
+	// A zone is held to every retained zone it shares a name, an actuator or a
+	// sensor with. Matched on the name alone, a renamed zone would carry its
+	// proof onto wiring nobody proved, and two zones exchanging sensors would
+	// each carry a proof onto the other circuit.
+	retainedIDs := make([]string, 0, len(prior))
+	for zoneID := range prior {
+		retainedIDs = append(retainedIDs, zoneID)
+	}
+	sort.Slice(retainedIDs, func(i, j int) bool {
+		a, b := prior[retainedIDs[i]], prior[retainedIDs[j]]
+		if a.Seq != b.Seq {
+			return a.Seq < b.Seq
+		}
+		return retainedIDs[i] < retainedIDs[j]
+	})
 	for _, z := range b.zones {
-		was, retained := prior[z.zoneID]
-		if !retained {
-			continue
-		}
-		changed := !sameIdentity(was.Identity, z.identity) ||
-			was.Mapping != z.mapping ||
-			was.CalibrationRef != z.calibrationRef
-		if !changed {
-			continue
-		}
-		if z.performedAtMs <= was.ProofAtMs {
-			return refuse(StageProofConsistency, ReasonStaleProof)
-		}
-		// A changed pin or polarity invalidates the control proof too: it was
-		// performed on the wiring this revision replaces.
-		if z.controlMethod == ControlCommanded && was.ControlProofAtMs != nil &&
-			z.controlPerformedAtMs <= *was.ControlProofAtMs {
-			return refuse(StageProofConsistency, ReasonStaleProof)
+		for _, zoneID := range retainedIDs {
+			was := prior[zoneID]
+			if zoneID != z.zoneID && !sameActuator(was.Identity, z.identity) &&
+				was.Sensor.SensorID != z.sensor.SensorID {
+				continue
+			}
+			changed := !sameIdentity(was.Identity, z.identity) ||
+				was.Mapping != z.mapping ||
+				was.Sensor != z.sensor
+			if !changed {
+				continue
+			}
+			// Freshness applies to a leg the revision claims: an undemonstrated
+			// leg carries no proof, so it inherits nothing and leaves the zone
+			// provisional rather than stale.
+			if z.method != MethodUnproven && z.performedAtMs <= was.ProofAtMs {
+				return refuse(StageProofConsistency, ReasonStaleProof)
+			}
+			// A changed pin or polarity invalidates the control proof too: it
+			// was performed on the wiring this revision replaces.
+			if z.controlMethod == ControlCommanded && was.ControlProofAtMs != nil &&
+				z.controlPerformedAtMs <= *was.ControlProofAtMs {
+				return refuse(StageProofConsistency, ReasonStaleProof)
+			}
 		}
 	}
 	return nil
+}
+
+// sameActuator compares two identities as the inventory does: a GPIO line by
+// its pin, whatever polarity either records; anything else by the whole
+// identity.
+func sameActuator(retained, identity map[string]any) bool {
+	pinA, okA := retained["gpio_pin"]
+	pinB, okB := identity["gpio_pin"]
+	if okA && okB {
+		return sameIdentity(map[string]any{"gpio_pin": pinA}, map[string]any{"gpio_pin": pinB})
+	}
+	return sameIdentity(retained, identity)
 }
 
 // checkObservations holds a set of observations to the mapping they claim to
@@ -1152,6 +1217,7 @@ func (b *parsedBinding) accepted(signature string) *Accepted {
 			Identity:           z.identity,
 			Mapping:            z.mapping,
 			CalibrationRef:     z.calibrationRef,
+			Sensor:             z.sensor,
 			ProofMethod:        z.method,
 			ProofPerformedAtMs: z.performedAtMs,
 			ControlProofMethod: z.controlMethod,
@@ -1171,6 +1237,14 @@ func (b *parsedBinding) accepted(signature string) *Accepted {
 // VerifyEnvelope verifies a binding envelope's wire bytes through the
 // contract's twelve stages in order. A non-nil error is always a *Refusal.
 func VerifyEnvelope(raw []byte, ctx Context) (*Accepted, error) {
+	return verifyEnvelope(raw, ctx, stProofConsistency)
+}
+
+// verifyEnvelope takes the proof_consistency stage as a parameter so a test
+// can hold the corpus to readings of the revision rule other than this one.
+func verifyEnvelope(
+	raw []byte, ctx Context, proofStage func(*parsedBinding, map[string]ZoneState) *Refusal,
+) (*Accepted, error) {
 	body, sig, sigText, r := parseEnvelope(raw, "binding")
 	if r != nil {
 		return nil, r
@@ -1202,7 +1276,7 @@ func VerifyEnvelope(raw []byte, ctx Context) (*Accepted, error) {
 	if r := stMappingSelfConsistency(b); r != nil {
 		return nil, r
 	}
-	if r := stProofConsistency(b, ctx.AcceptedZoneState); r != nil {
+	if r := proofStage(b, ctx.AcceptedZoneState); r != nil {
 		return nil, r
 	}
 	if r := stBounds(b, ctx.ProfileMultiplier); r != nil {

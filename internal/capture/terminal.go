@@ -40,6 +40,11 @@ func (t *TerminalAsker) Ask(prompt string) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// Say writes text the installer reads before the next question.
+func (t *TerminalAsker) Say(text string) {
+	fmt.Fprintf(t.Out, "\n%s\n", text)
+}
+
 // Choose offers exactly the options given and accepts nothing else.
 //
 // An unrecognised answer is re-asked rather than resolved to the nearest

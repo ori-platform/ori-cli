@@ -6,14 +6,17 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ori-platform/ori-cli/internal/binding"
 	"github.com/ori-platform/ori-cli/internal/capture"
+	"github.com/ori-platform/ori-cli/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -97,6 +100,17 @@ cannot name hardware the device does not have. Nothing is inferred: the three
 commissioned outcomes are asked separately, a contact type is not among the
 questions, and polarity is answered rather than defaulted.
 
+On a device with a binding in force, a change is a revision of it. The binding
+in force is read from the runtime, or with --revise from a file for preparation
+away from the device; either way it is used only when its canonical hash and
+sequence are the ones the runtime reports. Each fact is shown as that binding
+records it and asked only whether it changed; what did not is carried, and the
+prior value of what did is carried into the reason. A change to anything but
+the rated capacity or inventory generation, or hardware replaced like for like,
+needs fresh proof legs. Those can be proven only on a line no zone of the
+binding in force drives, so such a change on a driven line is refused as soon
+as it is declared.
+
 The draft is unsigned and incomplete by design. Signing is a separate step with
 its own key custody.`,
 		Args: cobra.NoArgs,
@@ -117,13 +131,22 @@ its own key custody.`,
 			if err != nil {
 				return fmt.Errorf("failed to read --force: %w", err)
 			}
-			return runBindingCapture(state, cmd.InOrStdin(), path, zone, out, force)
+			revise, err := cmd.Flags().GetString("revise")
+			if err != nil {
+				return fmt.Errorf("failed to read --revise: %w", err)
+			}
+			if cmd.Flags().Changed("revise") && revise == "" {
+				return errors.New("--revise names the signed binding in force; it was given empty")
+			}
+			return runBindingCaptureRevising(state, cmd.InOrStdin(), path, zone, out, force, revise)
 		},
 	}
 	captureCmd.Flags().String("path", "ori.yaml", "path to the runtime configuration")
 	captureCmd.Flags().String("zone", "", "the zone this binding covers")
 	captureCmd.Flags().String("out", "", "write the draft here instead of stdout")
 	captureCmd.Flags().Bool("force", false, "overwrite an existing draft")
+	captureCmd.Flags().String("revise", "",
+		"read the binding in force from this signed envelope instead of the runtime")
 	_ = captureCmd.MarkFlagRequired("zone")
 
 	deliverCmd := &cobra.Command{
@@ -187,6 +210,14 @@ installer can see before capturing what this device will accept.`,
 func runBindingCapture(
 	state *rootState, in io.Reader, path, zone, out string, force bool,
 ) error {
+	return runBindingCaptureRevising(state, in, path, zone, out, force, "")
+}
+
+// runBindingCaptureRevising is capture, and when revise names the binding in
+// force, a revision of it.
+func runBindingCaptureRevising(
+	state *rootState, in io.Reader, path, zone, out string, force bool, revise string,
+) error {
 	ctx, cancel := context.WithTimeout(context.Background(), exportTimeout)
 	defer cancel()
 
@@ -205,6 +236,9 @@ func runBindingCapture(
 		return fmt.Errorf("the runtime inventory is not readable: %w", decodeErr)
 	}
 
+	if err := checkChain(inv); err != nil {
+		return err
+	}
 	// Checked before a single question, so an operator does not answer nine of
 	// them at a panel to be told the path was in the way.
 	if out != "" {
@@ -213,15 +247,67 @@ func runBindingCapture(
 		}
 	}
 
+	// A binding in force makes every change a revision, captured against that
+	// binding: from the runtime's export, or from --revise when preparing away
+	// from the device. Neither route is trusted until the document is the one
+	// the inventory reports in force.
+	var prior capture.Prior
+	var refs []binding.ActuatorRef
+	revising := inv.AcceptedBindingHash != ""
+	if revise != "" && !revising {
+		return refusedError{fmt.Errorf(
+			"device %q reports no binding in force, so there is nothing to revise; "+
+				"capture a first binding without --revise", inv.DeviceID)}
+	}
+	if revising {
+		loaded, priorErr := loadPrior(state, ctx, path, revise, inv)
+		if priorErr != nil {
+			return priorErr
+		}
+		declared, refsErr := capture.DeclaredRefs(inv)
+		if refsErr != nil {
+			return fmt.Errorf("the runtime inventory is not readable: %w", refsErr)
+		}
+		prior, refs = loaded, declared
+	}
+
 	asker := capture.NewTerminalAsker(in, state.stderr)
-	draft, captureErr := capture.Capture(asker, inv, zone, state.nowMs())
-	if captureErr != nil {
-		return refusedError{captureErr}
+	var draft binding.Binding
+	var revision *capture.Revision
+	if !revising {
+		captured, captureErr := capture.Capture(asker, inv, zone, state.nowMs())
+		if captureErr != nil {
+			return refusedError{captureErr}
+		}
+		draft = captured
+	} else {
+		revised, rev, reviseErr := capture.Revise(asker, inv, prior, zone, state.nowMs())
+		if reviseErr != nil {
+			return refusedError{reviseErr}
+		}
+		// The verifier's own stages over the draft, against what the runtime
+		// retained: a revision the runtime would refuse is refused here, before
+		// a signature exists.
+		if checkErr := revised.CheckRevision(binding.RetainedState(prior.Accepted), binding.Context{
+			DeclaredSensorIDs: inv.SensorIDs,
+			DeclaredActuators: refs,
+			DeploymentPosture: inv.DeploymentPosture,
+		}); checkErr != nil {
+			return refusedError{fmt.Errorf(
+				"the runtime would refuse this revision (%v); nothing was written", checkErr)}
+		}
+		draft, revision = revised, &rev
 	}
 
 	encoded, encodeErr := capture.DraftJSON(draft)
 	if encodeErr != nil {
 		return fmt.Errorf("failed to encode the draft: %w", encodeErr)
+	}
+	if state.json {
+		return reportCapturedJSON(state, encoded, out, force, revision)
+	}
+	if revision != nil {
+		reportRevision(state.stderr, *revision)
 	}
 	if out == "" {
 		_, writeErr := state.stdout.Write(append(encoded, '\n'))
@@ -232,6 +318,111 @@ func runBindingCapture(
 	}
 	fmt.Fprintf(state.stderr, "wrote an unsigned draft to %s\n", out)
 	return nil
+}
+
+// loadPrior reads the binding in force from the runtime's export, or from the
+// file --revise names, and binds it to the inventory's account of it.
+func loadPrior(
+	state *rootState, ctx context.Context, path, revise string, inv capture.Inventory,
+) (capture.Prior, error) {
+	if revise != "" {
+		// Standard input carries the ceremony's answers; it cannot also carry
+		// the document they are measured against.
+		if revise == "-" {
+			return capture.Prior{}, errors.New(
+				"--revise names a file; standard input carries the ceremony's answers")
+		}
+		raw, err := readDocument(nil, revise)
+		if err != nil {
+			return capture.Prior{}, err
+		}
+		prior, err := capture.LoadPrior(inv, raw)
+		if err != nil {
+			return capture.Prior{}, refusedError{err}
+		}
+		return prior, nil
+	}
+	payload, err := invokeBridgeEchoing(state, ctx, []string{
+		"commissioning", "binding-export", "--path", path,
+	}, false)
+	if err != nil {
+		return capture.Prior{}, err
+	}
+	raw, err := json.Marshal(payload["result"])
+	if err != nil {
+		return capture.Prior{}, fmt.Errorf("failed to re-encode the binding export: %w", err)
+	}
+	prior, err := capture.LoadExported(inv, raw)
+	if err != nil {
+		return capture.Prior{}, refusedError{err}
+	}
+	return prior, nil
+}
+
+// checkChain refuses an inventory whose account of the chain contradicts
+// itself. The runtime reports both values from the one binding in force, so a
+// sequence without a hash, or the reverse, is not a device state.
+func checkChain(inv capture.Inventory) error {
+	if (inv.AcceptedBindingSeq == 0) != (inv.AcceptedBindingHash == "") || inv.AcceptedBindingSeq < 0 {
+		return fmt.Errorf(
+			"the runtime inventory reports binding_seq %d with hash %q; a binding in "+
+				"force has both and a device without one has neither",
+			inv.AcceptedBindingSeq, inv.AcceptedBindingHash)
+	}
+	if inv.AcceptedBindingHash != "" && !binding.IsDigest(inv.AcceptedBindingHash) {
+		return fmt.Errorf(
+			"the runtime inventory reports %q as the binding in force, which is not a "+
+				"canonical hash", inv.AcceptedBindingHash)
+	}
+	return nil
+}
+
+// reportCapturedJSON emits the one object JSON mode promises.
+func reportCapturedJSON(
+	state *rootState, encoded []byte, out string, force bool, revision *capture.Revision,
+) error {
+	result := map[string]any{}
+	if revision != nil {
+		result["revision"] = revision
+	}
+	if out == "" {
+		result["draft"] = json.RawMessage(encoded)
+	} else {
+		if writeErr := writeDraft(out, append(encoded, '\n'), force); writeErr != nil {
+			return writeErr
+		}
+		result["path"] = out
+	}
+	return output.JSON(state.stdout, map[string]any{"ok": true, "result": result})
+}
+
+// reportRevision says what the revision changed, carried, and needs.
+func reportRevision(w io.Writer, rev capture.Revision) {
+	fmt.Fprintf(w, "\nrevision of binding %d (%s) as binding %d, zone %q\n",
+		rev.SupersedesSeq, rev.Supersedes, rev.BindingSeq, rev.ZoneID)
+	for _, c := range rev.Changed {
+		fmt.Fprintf(w, "  changed: %s: %s -> %s\n", c.Fact, c.Was, c.Now)
+	}
+	if len(rev.Changed) == 0 {
+		fmt.Fprintf(w, "  changed: nothing\n")
+	}
+	fmt.Fprintf(w, "  carried: %s\n", listOrNone(rev.Carried))
+	fmt.Fprintf(w, "  other zones carried unchanged: %s\n", listOrNone(rev.CarriedZones))
+	if rev.FreshProof {
+		fmt.Fprintf(w, "  fresh proof required by: %s\n", strings.Join(rev.Because, ", "))
+	}
+	fmt.Fprintf(w, "  circuit leg: %s; control leg: %s\n", rev.CircuitLeg, rev.ControlLeg)
+	fmt.Fprintf(w, "  zone %q proof once delivered: %s\n", rev.ZoneID, rev.ProofState)
+	fmt.Fprintf(w, "  trip-point bound (capacity times the release's multiplier, against "+
+		"full scale): not checked here, decided at delivery\n")
+	fmt.Fprintf(w, "  reason: %s\n", rev.Reason)
+}
+
+func listOrNone(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	return strings.Join(values, ", ")
 }
 
 // runBindingDeliver hands a signed envelope to the runtime and reports its verdict.

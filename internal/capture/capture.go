@@ -28,6 +28,8 @@ type Asker interface {
 	// Choose returns one of options. It must not accept anything else.
 	Choose(prompt string, options []string) (string, error)
 	Ask(prompt string) (string, error)
+	// Say tells the installer something that needs no answer.
+	Say(text string)
 }
 
 // Inventory is the runtime's declared hardware, as `commissioning inventory`
@@ -156,7 +158,7 @@ func Capture(a Asker, inv Inventory, zoneID string, nowMs int64) (binding.Bindin
 		return binding.Binding{}, err
 	}
 
-	proof, err := captureProof(a, mapping, nowMs)
+	proof, err := captureProof(a, mapping, nowMs, 0)
 	if err != nil {
 		return binding.Binding{}, err
 	}
@@ -309,19 +311,30 @@ func captureMapping(a Asker) (binding.Mapping, error) {
 	}, nil
 }
 
+// maxProofSkewMs is how far past this machine's clock a proof may be dated
+// before the time is refused as a typo: the next revision must follow it, and
+// a proof dated centuries ahead would block every one.
+const maxProofSkewMs = 5 * 60 * 1000
+
 // captureProof records how the mapping was established, or that it was not.
+//
+// A revision passes the time of the proof in force as after, and a claimed leg
+// time is refused as soon as it is given if it is not later: a leg no later
+// than the one it replaces could be the proof of what the revision changed.
 //
 // `commanded_and_observed` is absent by design: the control leg is proven by
 // the runtime commanding the coil, and its observations are read back from the
 // runtime rather than typed here. A leg this tool authored would record what
 // the tool asserted.
-func captureProof(a Asker, mapping binding.Mapping, nowMs int64) (binding.Proof, error) {
+func captureProof(a Asker, mapping binding.Mapping, nowMs, after int64) (binding.Proof, error) {
 	method, err := a.Choose(
 		"How was the circuit leg established?",
 		[]string{binding.MethodPreEnergy, binding.MethodUnproven})
 	if err != nil {
 		return binding.Proof{}, err
 	}
+	// An undemonstrated leg claims no proof, so it is not held to the time of
+	// the proof in force: it inherits nothing and leaves the zone provisional.
 	if method == binding.MethodUnproven {
 		reason, askErr := a.Ask("Why could no proof be performed?")
 		if askErr != nil {
@@ -341,6 +354,12 @@ func captureProof(a Asker, mapping binding.Mapping, nowMs int64) (binding.Proof,
 		}, nil
 	}
 
+	// A claimed leg must follow the proof in force and cannot be dated past
+	// this machine's clock; a proof in force dated beyond it leaves no time
+	// the leg could have, which is said before the time is asked for.
+	if after >= nowMs+maxProofSkewMs {
+		return binding.Proof{}, futureProofInForce(after, nowMs)
+	}
 	performedAt, err := askInt(a,
 		"When was that proof performed? Unix milliseconds:")
 	if err != nil {
@@ -349,6 +368,15 @@ func captureProof(a Asker, mapping binding.Mapping, nowMs int64) (binding.Proof,
 	if performedAt <= 0 {
 		return binding.Proof{}, fmt.Errorf(
 			"a proof records when it was performed; %d is not a time", performedAt)
+	}
+	if performedAt > nowMs+maxProofSkewMs {
+		return binding.Proof{}, fmt.Errorf(
+			"a proof performed at %d is later than this machine's clock (%d); a "+
+				"proof dated in the future would have to be followed by every later "+
+				"revision", performedAt, nowMs)
+	}
+	if performedAt <= after {
+		return binding.Proof{}, notAfter(performedAt, after, nowMs)
 	}
 
 	// A proof admits a non-empty observations list, and both outcomes must be
@@ -562,4 +590,25 @@ func supersedes(inv Inventory) *string {
 	}
 	hash := inv.AcceptedBindingHash
 	return &hash
+}
+
+func notAfter(at, after, nowMs int64) error {
+	if after >= nowMs {
+		return futureProofInForce(after, nowMs)
+	}
+	return fmt.Errorf(
+		"a circuit leg performed at %d is not after the proof in force at %d, so "+
+			"it could be the proof of what this revision replaced; it needs a proof "+
+			"performed after the change", at, after)
+}
+
+// futureProofInForce names why no fresh leg is possible: the proof in force is
+// dated after this machine's clock, and a fresh leg has to follow it.
+func futureProofInForce(after, nowMs int64) error {
+	return fmt.Errorf(
+		"the proof in force is dated %d, after this machine's clock (%d), and a "+
+			"claimed leg has to be performed after it; no leg recorded now can be. "+
+			"Record the leg undemonstrated, which is held to no time, or capture "+
+			"this revision once the clock passes that time or the proof in force "+
+			"is corrected", after, nowMs)
 }
