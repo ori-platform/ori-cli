@@ -34,6 +34,8 @@ type Options struct {
 	UseToken     func(string, token.UseOptions) (token.OfflineUseResult, error)
 	FirmwareMQTT FirmwareMQTTRunner
 	NowMs        func() int64
+	// Stdin is what interactive commands read; os.Stdin when nil.
+	Stdin io.Reader
 }
 
 type rootState struct {
@@ -81,6 +83,9 @@ func ExecuteWithOptions(args []string, stdout io.Writer, stderr io.Writer, opts 
 
 	root := newRootCommand(&state)
 	root.SetArgs(args)
+	if opts.Stdin != nil {
+		root.SetIn(opts.Stdin)
+	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	if err := root.Execute(); err != nil {

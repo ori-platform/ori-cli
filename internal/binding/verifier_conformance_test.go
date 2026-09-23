@@ -105,16 +105,80 @@ type wireContext struct {
 		} `json:"actuators"`
 	} `json:"declared_inventory"`
 	AcceptedZoneState map[string]struct {
-		Identity       map[string]any    `json:"identity"`
-		Mapping        map[string]string `json:"mapping"`
-		CalibrationRef string            `json:"calibration_ref"`
-		ProofAtMs      int64             `json:"proof_at_ms"`
+		Identity  map[string]any    `json:"identity"`
+		Mapping   map[string]string `json:"mapping"`
+		Sensor    wireSensor        `json:"sensor"`
+		ProofAtMs int64             `json:"proof_at_ms"`
 		// Absent when the retained document carried no control leg.
 		ControlProofAtMs *int64 `json:"control_proof_at_ms"`
 	} `json:"accepted_zone_state"`
 	FirmwareDeviceID string            `json:"firmware_device_id"`
 	Channel          string            `json:"channel"`
 	ExpectedMapping  map[string]string `json:"expected_mapping"`
+}
+
+// wireSensor is a retained sensor object as the corpus spells it.
+type wireSensor struct {
+	SensorID       string      `json:"sensor_id"`
+	Quantity       string      `json:"quantity"`
+	Unit           string      `json:"unit"`
+	RangeMin       json.Number `json:"range_min"`
+	RangeMax       json.Number `json:"range_max"`
+	Direction      string      `json:"direction"`
+	NoiseFloor     json.Number `json:"noise_floor"`
+	CalibrationRef string      `json:"calibration_ref"`
+}
+
+func (w wireSensor) sensor(t testing.TB) binding.Sensor {
+	t.Helper()
+	number := func(n json.Number) float64 {
+		v, err := n.Float64()
+		if err != nil {
+			t.Fatalf("retained sensor number %q: %v", n, err)
+		}
+		return v
+	}
+	if w.SensorID == "" {
+		t.Fatal("a retained zone state carries no sensor")
+	}
+	return binding.Sensor{
+		SensorID: w.SensorID, Quantity: w.Quantity, Unit: w.Unit,
+		RangeMin: number(w.RangeMin), RangeMax: number(w.RangeMax),
+		Direction: w.Direction, NoiseFloor: number(w.NoiseFloor),
+		CalibrationRef: w.CalibrationRef,
+	}
+}
+
+// retainedOrder is each accepted_zone_state key's position as the corpus wrote
+// it, which a map decode loses.
+func retainedOrder(t testing.TB, raw json.RawMessage) map[string]int {
+	t.Helper()
+	var ctx struct {
+		AcceptedZoneState json.RawMessage `json:"accepted_zone_state"`
+	}
+	if err := json.Unmarshal(raw, &ctx); err != nil {
+		t.Fatalf("decode verifier_context: %v", err)
+	}
+	order := map[string]int{}
+	if len(ctx.AcceptedZoneState) == 0 || string(ctx.AcceptedZoneState) == "null" {
+		return order
+	}
+	dec := json.NewDecoder(bytes.NewReader(ctx.AcceptedZoneState))
+	if _, err := dec.Token(); err != nil {
+		t.Fatalf("accepted_zone_state: %v", err)
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			t.Fatalf("accepted_zone_state key: %v", err)
+		}
+		order[key.(string)] = len(order)
+		var skip json.RawMessage
+		if err := dec.Decode(&skip); err != nil {
+			t.Fatalf("accepted_zone_state value: %v", err)
+		}
+	}
+	return order
 }
 
 func decodeContext(t testing.TB, raw json.RawMessage) wireContext {
@@ -184,11 +248,13 @@ func bindingContext(t testing.TB, raw json.RawMessage) binding.Context {
 		}
 		ctx.DeclaredActuators = append(ctx.DeclaredActuators, ref)
 	}
+	order := retainedOrder(t, raw)
 	for zoneID, was := range w.AcceptedZoneState {
 		ctx.AcceptedZoneState[zoneID] = binding.ZoneState{
+			Seq:              order[zoneID],
 			Identity:         was.Identity,
 			Mapping:          mappingOf(was.Mapping),
-			CalibrationRef:   was.CalibrationRef,
+			Sensor:           was.Sensor.sensor(t),
 			ProofAtMs:        was.ProofAtMs,
 			ControlProofAtMs: was.ControlProofAtMs,
 		}
@@ -777,31 +843,50 @@ func TestRetainedStateBuiltFromGoValuesMatchesTheWire(t *testing.T) {
 	// that any spurious "changed" verdict surfaces as stale_proof.
 	ctx.AcceptedZoneState = map[string]binding.ZoneState{
 		"borehole-pump": {
-			Identity:       map[string]any{"firmware_device_id": "ori-fw-7c9f2b3a", "channel": "relay0"},
-			Mapping:        binding.Mapping{OpenProtectedCircuit: "energised", CloseProtectedCircuit: "de_energised", DeEnergisedTerminalState: "closed"},
-			CalibrationRef: "sct013-100-2026-08-19-b",
-			ProofAtMs:      1800000000000,
+			Identity:  map[string]any{"firmware_device_id": "ori-fw-7c9f2b3a", "channel": "relay0"},
+			Mapping:   binding.Mapping{OpenProtectedCircuit: "energised", CloseProtectedCircuit: "de_energised", DeEnergisedTerminalState: "closed"},
+			Sensor:    corpusSensor("load-current-pump", "sct013-100-2026-08-19-b"),
+			ProofAtMs: 1800000000000,
 		},
 		"main-distribution": {
-			Identity:       map[string]any{"gpio_pin": 26, "active_high": false},
-			Mapping:        binding.Mapping{OpenProtectedCircuit: "de_energised", CloseProtectedCircuit: "energised", DeEnergisedTerminalState: "open"},
-			CalibrationRef: "sct013-100-2026-08-19-a",
-			ProofAtMs:      1800000000000,
+			Identity:  map[string]any{"gpio_pin": 26, "active_high": false},
+			Mapping:   binding.Mapping{OpenProtectedCircuit: "de_energised", CloseProtectedCircuit: "energised", DeEnergisedTerminalState: "open"},
+			Sensor:    corpusSensor("load-current-main", "sct013-100-2026-08-19-a"),
+			ProofAtMs: 1800000000000,
 		},
 	}
 	env := envelopeBytes("binding", revision.Binding, revision.SignatureB64)
 	if _, err := binding.VerifyEnvelope(env, ctx); err != nil {
 		t.Fatalf("revision with fresh proof refused against Go-built retained state: %v", err)
 	}
+	// A sensor that differs in any field but calibration must trip it too.
+	rebound := ctx.AcceptedZoneState["main-distribution"]
+	rebound.Sensor.RangeMax = 50
+	rebound.ProofAtMs = 1800000600000
+	ctx.AcceptedZoneState["main-distribution"] = rebound
+	_, err := binding.VerifyEnvelope(env, ctx)
+	if r := refusalOf(t, err); r.Stage != binding.StageProofConsistency || r.Reason != binding.ReasonStaleProof {
+		t.Fatalf("a re-described sensor refused at %s (%s); want proof_consistency (stale_proof)", r.Stage, r.Reason)
+	}
+	rebound.Sensor.RangeMax = 100
+	rebound.ProofAtMs = 1800000000000
+	ctx.AcceptedZoneState["main-distribution"] = rebound
 	// And the same state with a pin that differs must trip the revision rule.
 	changed := ctx.AcceptedZoneState["main-distribution"]
 	changed.Identity = map[string]any{"gpio_pin": 27, "active_high": false}
 	changed.ProofAtMs = 1800000600000
 	ctx.AcceptedZoneState["main-distribution"] = changed
-	_, err := binding.VerifyEnvelope(env, ctx)
+	_, err = binding.VerifyEnvelope(env, ctx)
 	r := refusalOf(t, err)
 	if r.Stage != binding.StageProofConsistency || r.Reason != binding.ReasonStaleProof {
 		t.Fatalf("refused at %s (%s); want proof_consistency (stale_proof)", r.Stage, r.Reason)
+	}
+}
+
+func corpusSensor(id, calibration string) binding.Sensor {
+	return binding.Sensor{
+		SensorID: id, Quantity: "current", Unit: "ampere", RangeMin: 0, RangeMax: 100,
+		Direction: "positive_is_load_draw", NoiseFloor: 0.05, CalibrationRef: calibration,
 	}
 }
 
@@ -930,5 +1015,41 @@ func TestRawRejectCasesAreRefusedFromBytes(t *testing.T) {
 					r.Stage, r.Reason, rc.Stage, rc.Reason)
 			}
 		})
+	}
+}
+
+// TestAFirmwareZoneIsFollowedAcrossARename holds a firmware-channel zone to the
+// retained zone with the same identity under another name: the rule matches
+// hardware, not the name, for every actuator kind.
+func TestAFirmwareZoneIsFollowedAcrossARename(t *testing.T) {
+	c := loadFullCorpus(t)
+	var revision *rejectCase
+	for i := range c.Cases {
+		if c.Cases[i].Name == "revision_with_fresh_proof_accepted" {
+			revision = &c.Cases[i]
+		}
+	}
+	if revision == nil {
+		t.Fatal("corpus no longer carries revision_with_fresh_proof_accepted")
+	}
+	ctx := bindingContext(t, revision.VerifierContext)
+	env := envelopeBytes("binding", revision.Binding, revision.SignatureB64)
+	pump, ok := ctx.AcceptedZoneState["borehole-pump"]
+	if !ok {
+		t.Fatal("the case retains no borehole-pump zone")
+	}
+	delete(ctx.AcceptedZoneState, "borehole-pump")
+	pump.Mapping = binding.Mapping{
+		OpenProtectedCircuit: "de_energised", CloseProtectedCircuit: "energised",
+		DeEnergisedTerminalState: "open",
+	}
+	// Another sensor too, so the firmware identity is the only thing shared.
+	pump.Sensor.SensorID = "clamp-before-rename"
+	pump.ProofAtMs = 1900000000000
+	ctx.AcceptedZoneState["pump-before-rename"] = pump
+	_, err := binding.VerifyEnvelope(env, ctx)
+	r := refusalOf(t, err)
+	if r.Stage != binding.StageProofConsistency || r.Reason != binding.ReasonStaleProof {
+		t.Fatalf("a firmware zone under a new name kept its proof: %s (%s)", r.Stage, r.Reason)
 	}
 }

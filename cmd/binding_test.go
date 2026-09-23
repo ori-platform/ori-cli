@@ -164,7 +164,7 @@ func stateWith(bridge BridgeRunner, stdout, stderr *bytes.Buffer) *rootState {
 const inventoryOK = `{"ok":true,"result":{"device_id":"bench-01",
 "sensor_ids":["load-current-main"],
 "actuators":[{"kind":"local_gpio","identity":{"gpio_pin":26}}],
-"deployment_posture":"development","accepted_binding_seq":3}}`
+"deployment_posture":"development","accepted_binding_seq":0,"accepted_binding_hash":null}}`
 
 // sensor, actuator, polarity, open, close, terminal, capacity, range, method
 const exportBothMatched = `{"ok":true,"result":{"observations":[

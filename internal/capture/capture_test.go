@@ -16,6 +16,7 @@ type scripted struct {
 	answers []string
 	offered [][]string
 	prompts []string
+	said    []string
 	at      int
 }
 
@@ -44,6 +45,8 @@ func (s *scripted) Choose(prompt string, options []string) (string, error) {
 }
 
 func (s *scripted) Ask(prompt string) (string, error) { return s.next(prompt) }
+
+func (s *scripted) Say(text string) { s.said = append(s.said, text) }
 
 var (
 	errExhausted  = errStr("the ceremony asked more questions than the script answers")
