@@ -2,6 +2,8 @@ module github.com/ori-platform/ori-cli
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	github.com/ori-platform/ori-canonicaljson v0.1.0
 	github.com/spf13/cobra v1.10.2
